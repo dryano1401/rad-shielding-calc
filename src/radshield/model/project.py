@@ -76,6 +76,60 @@ class Calibration:
 
 
 @dataclass
+class Barrier:
+    """A shielding barrier declared by name rather than drawn on the plan.
+
+    Used where the attenuating structure is not on the drawing, or not worth
+    drawing: a slab, a leaded door, a control booth window.  Thickness is
+    always in millimetres regardless of the material's tabulated unit, so the
+    stored value never depends on which methodology consumes it.
+    """
+
+    material: str
+    thickness_mm: float
+    label: str = ""
+
+
+@dataclass
+class Wall:
+    """A wall drawn on a floor plan, acting as a barrier when a path crosses it.
+
+    The wall is a vertical rectangle: the plan segment ``p1``-``p2`` extruded
+    between ``base_height_m`` and ``top_height_m`` above its own floor.  Giving
+    it a height is what lets a path between floors be tested honestly -- a ray
+    climbing to the storey above crosses a partition only while it is still
+    below the top of that partition.
+
+    Attributes:
+        p1: One end of the wall in PDF page space.
+        p2: The other end, same space.
+        material: Material name, resolved against whichever methodology is
+            evaluating the path.
+        thickness_mm: Wall thickness in millimetres.
+        base_height_m: Bottom of the wall above its floor.
+        top_height_m: Top of the wall above its floor.
+        label: Free text for the audit trail.
+    """
+
+    id: str
+    p1: tuple[float, float]
+    p2: tuple[float, float]
+    material: str = "concrete"
+    thickness_mm: float = 150.0
+    base_height_m: float = 0.0
+    top_height_m: float = 3.0
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        if self.thickness_mm <= 0:
+            raise ValueError(f"wall thickness must be positive, got {self.thickness_mm}")
+        if self.top_height_m <= self.base_height_m:
+            raise ValueError(
+                f"wall top ({self.top_height_m}) must be above its base ({self.base_height_m})"
+            )
+
+
+@dataclass
 class Measurement:
     """A recorded distance between two points on one drawing.
 
@@ -119,6 +173,7 @@ class Floor:
     page_width: float = 0.0
     page_height: float = 0.0
     measurements: list[Measurement] = field(default_factory=list)
+    walls: list[Wall] = field(default_factory=list)
 
     @property
     def is_calibrated(self) -> bool:
@@ -164,6 +219,10 @@ class PointOfInterest:
             (cm for TG-108 materials, mm for NCRP 147).
         linked_source_ids: Sources incident on this point.  All of them
             contribute; their doses are summed before solving.
+        manual_barriers: Source id to barriers declared for that path
+            specifically, added to whatever walls the path crosses.  A point
+            may be shielded from different sources by different structures, so
+            these are per source rather than per point.
         distance_overrides: Source id to distance in metres, replacing the
             distance derived from the placed geometry.  Use when the drawing
             geometry is not the distance the calculation should use -- an
@@ -186,6 +245,17 @@ class PointOfInterest:
     existing_thickness: float = 0.0
     linked_source_ids: list[str] = field(default_factory=list)
     distance_overrides: dict[str, float] = field(default_factory=dict)
+    manual_barriers: dict[str, list[Barrier]] = field(default_factory=dict)
+
+
+def _poi_from_dict(raw: dict[str, Any]) -> PointOfInterest:
+    """Rebuild a point of interest, restoring its nested barrier objects."""
+    data = dict(raw)
+    data["manual_barriers"] = {
+        source_id: [Barrier(**b) for b in barriers]
+        for source_id, barriers in (raw.get("manual_barriers") or {}).items()
+    }
+    return PointOfInterest(**data)
 
 
 @dataclass
@@ -198,6 +268,7 @@ class Project:
     pois: list[PointOfInterest] = field(default_factory=list)
     materials: list[str] = field(default_factory=lambda: ["lead", "concrete"])
     display_unit: str = "ft"
+    apply_obliquity: bool = False
     schema_version: int = 1
 
     def floor(self, floor_id: str) -> Floor:
@@ -231,6 +302,8 @@ class Project:
             poi.linked_source_ids = [i for i in poi.linked_source_ids if i not in removed]
             for source_id in removed:
                 poi.distance_overrides.pop(source_id, None)
+                poi.manual_barriers.pop(source_id, None)
+            poi.manual_barriers.pop(source_id, None)
 
     def remove_source(self, source_id: str) -> None:
         """Delete a source and unlink it everywhere."""
@@ -238,6 +311,7 @@ class Project:
         for poi in self.pois:
             poi.linked_source_ids = [i for i in poi.linked_source_ids if i != source_id]
             poi.distance_overrides.pop(source_id, None)
+            poi.manual_barriers.pop(source_id, None)
 
     def set_floor_to_floor(self, heights_m: list[float]) -> None:
         """Set elevations from consecutive floor-to-floor heights.
@@ -291,6 +365,19 @@ class Project:
                 )
                 for m in raw.get("measurements", [])
             ]
+            walls = [
+                Wall(
+                    id=w["id"],
+                    p1=tuple(w["p1"]),
+                    p2=tuple(w["p2"]),
+                    material=w.get("material", "concrete"),
+                    thickness_mm=w.get("thickness_mm", 150.0),
+                    base_height_m=w.get("base_height_m", 0.0),
+                    top_height_m=w.get("top_height_m", 3.0),
+                    label=w.get("label", ""),
+                )
+                for w in raw.get("walls", [])
+            ]
             floors.append(
                 Floor(
                     id=raw["id"],
@@ -303,6 +390,7 @@ class Project:
                     page_width=raw.get("page_width", 0.0),
                     page_height=raw.get("page_height", 0.0),
                     measurements=measurements,
+                    walls=walls,
                 )
             )
 
@@ -310,8 +398,9 @@ class Project:
             name=data.get("name", "Untitled project"),
             floors=floors,
             sources=[SourcePoint(**raw) for raw in data.get("sources", [])],
-            pois=[PointOfInterest(**raw) for raw in data.get("pois", [])],
+            pois=[_poi_from_dict(raw) for raw in data.get("pois", [])],
             materials=data.get("materials", ["lead", "concrete"]),
             display_unit=data.get("display_unit", "ft"),
+            apply_obliquity=data.get("apply_obliquity", False),
             schema_version=1,
         )

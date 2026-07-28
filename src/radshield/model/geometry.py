@@ -20,7 +20,15 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from .project import Floor, LENGTH_UNITS, Measurement, PointOfInterest, Project, SourcePoint
+from .project import (
+    LENGTH_UNITS,
+    Floor,
+    Measurement,
+    PointOfInterest,
+    Project,
+    SourcePoint,
+    Wall,
+)
 
 # TG-108 Fig. 5 conventions.
 SOURCE_HEIGHT_M = 1.0
@@ -239,6 +247,169 @@ def distance(
         warnings=warnings,
         geometric_m=geometric,
     )
+
+
+@dataclass
+class Crossing:
+    """A barrier a source-to-point path passes through."""
+
+    material: str
+    thickness_mm: float
+    effective_thickness_mm: float
+    label: str
+    angle_deg: float = 0.0
+    wall_id: str | None = None
+    floor_name: str = ""
+
+    @property
+    def is_oblique(self) -> bool:
+        """True when the obliquity correction changed the traversed thickness."""
+        return abs(self.effective_thickness_mm - self.thickness_mm) > 1e-9
+
+
+def world_point(project: Project, floor: Floor, x: float, y: float, height_m: float
+                ) -> tuple[float, float, float]:
+    """Convert a point on a floor to project world coordinates in metres."""
+    east, north, _ = floor_offset_m(floor, x, y)
+    return east, north, floor.elevation_m + height_m
+
+
+def wall_crossing(
+    project: Project,
+    floor: Floor,
+    wall: Wall,
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+    *,
+    apply_obliquity: bool = False,
+) -> Crossing | None:
+    """Return the crossing if the segment ``start``-``end`` passes through ``wall``.
+
+    The wall is treated as a vertical rectangle: its plan segment extruded
+    between its base and top heights.  This is what makes a single test work
+    for paths within a storey and paths between storeys -- a partition that
+    stops at 3 m simply is not in the way of a ray that has already climbed
+    above it.
+
+    Args:
+        apply_obliquity: Scale the traversed thickness by ``1 / cos(theta)``
+            for a path crossing at ``theta`` from the wall normal.  Off by
+            default, which under-counts material and so errs safe.
+
+    Returns:
+        The crossing, or None when the path misses the wall.
+    """
+    ax, ay, _ = world_point(project, floor, wall.p1[0], wall.p1[1], 0.0)
+    bx, by, _ = world_point(project, floor, wall.p2[0], wall.p2[1], 0.0)
+
+    wall_dx, wall_dy = bx - ax, by - ay
+    wall_length = math.hypot(wall_dx, wall_dy)
+    if wall_length < 1e-9:
+        return None
+
+    # Horizontal normal of the wall plane.
+    nx, ny = -wall_dy / wall_length, wall_dx / wall_length
+
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    dz = end[2] - start[2]
+
+    denominator = dx * nx + dy * ny
+    if abs(denominator) < 1e-12:
+        # The path runs parallel to the wall, so it never crosses it.
+        return None
+
+    t = ((ax - start[0]) * nx + (ay - start[1]) * ny) / denominator
+    if not 0.0 <= t <= 1.0:
+        return None
+
+    hit_x = start[0] + t * dx
+    hit_y = start[1] + t * dy
+    hit_z = start[2] + t * dz
+
+    # Within the wall's extent in plan?
+    along = ((hit_x - ax) * wall_dx + (hit_y - ay) * wall_dy) / (wall_length**2)
+    if not 0.0 <= along <= 1.0:
+        return None
+
+    # Within the wall's height band?
+    base_z = floor.elevation_m + wall.base_height_m
+    top_z = floor.elevation_m + wall.top_height_m
+    if not base_z <= hit_z <= top_z:
+        return None
+
+    path_length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    cos_theta = abs(dx * nx + dy * ny) / path_length if path_length else 1.0
+    angle = math.degrees(math.acos(min(max(cos_theta, -1.0), 1.0)))
+
+    effective = wall.thickness_mm
+    if apply_obliquity and cos_theta > 1e-6:
+        effective = wall.thickness_mm / cos_theta
+
+    return Crossing(
+        material=wall.material,
+        thickness_mm=wall.thickness_mm,
+        effective_thickness_mm=effective,
+        label=wall.label or f"{wall.material} wall",
+        angle_deg=angle,
+        wall_id=wall.id,
+        floor_name=floor.name,
+    )
+
+
+def path_barriers(
+    project: Project,
+    source: SourcePoint,
+    poi: PointOfInterest,
+    *,
+    apply_obliquity: bool = False,
+) -> tuple[list[Crossing], list[str]]:
+    """Every barrier between a source and a point: walls crossed, plus named ones.
+
+    Walls on *all* floors are tested, not just the source's or the point's.
+    The height band does the filtering, so a wall only counts when the path
+    genuinely runs through it.
+
+    Returns:
+        ``(crossings, warnings)``.
+    """
+    warnings: list[str] = []
+    try:
+        source_floor = project.floor(source.floor_id)
+        poi_floor = project.floor(poi.floor_id)
+    except KeyError as exc:
+        return [], [str(exc)]
+
+    poi_height, _ = target_height(source_floor, poi_floor, poi)
+    start = world_point(project, source_floor, source.x, source.y, source.height_above_floor_m)
+    end = world_point(project, poi_floor, poi.x, poi.y, poi_height)
+
+    crossings: list[Crossing] = []
+    for floor in project.floors:
+        if floor.calibration is None:
+            if floor.walls:
+                warnings.append(
+                    f"floor {floor.name!r} has walls but no scale calibration; they were ignored"
+                )
+            continue
+        for wall in floor.walls:
+            hit = wall_crossing(
+                project, floor, wall, start, end, apply_obliquity=apply_obliquity
+            )
+            if hit is not None:
+                crossings.append(hit)
+
+    for barrier in poi.manual_barriers.get(source.id, []):
+        crossings.append(
+            Crossing(
+                material=barrier.material,
+                thickness_mm=barrier.thickness_mm,
+                effective_thickness_mm=barrier.thickness_mm,
+                label=barrier.label or f"{barrier.material} barrier",
+            )
+        )
+
+    return crossings, warnings
 
 
 def check_project(project: Project) -> list[str]:

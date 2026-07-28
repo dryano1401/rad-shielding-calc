@@ -426,3 +426,182 @@ def test_csv_export_records_the_geometric_distance_alongside_the_override(client
     source_row = next(row for row in rows if row["row_type"] == "source")
     assert float(source_row["distance_m"]) == 6.0
     assert float(source_row["geometric_distance_m"]) == pytest.approx(3.8)
+
+
+def wall_scenario(client):
+    """A source and a point 8 m apart on one floor, straddling the line x = 0."""
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    calibrate(client, floor_id, metres_per_unit=0.1)
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    project = client.post("/api/sources", json={
+        "floor_id": floor_id, "x": -40, "y": 0, "label": "Uptake room",
+        "method": "tg108", "height_above_floor_m": 1.0,
+        "params": {"kind": "uptake", "nuclide": "F-18",
+                   "administered_activity_MBq": 555, "patients_per_week": 40,
+                   "uptake_time_h": 1.0},
+    }).json()
+    source_id = project["sources"][0]["id"]
+    project = client.post("/api/pois", json={
+        "floor_id": floor_id, "x": 40, "y": 0, "label": "Office",
+        "occupancy": 1.0, "area_class": "uncontrolled", "auto_height": False,
+        "height_above_floor_m": 1.0, "linked_source_ids": [source_id],
+    }).json()
+    client.post("/api/materials", json={"materials": ["lead"]})
+    return floor_id, source_id, project["pois"][0]["id"]
+
+
+def test_wall_crud(client):
+    floor_id, _, _ = wall_scenario(client)
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete",
+        "thickness_mm": 200, "top_height_m": 3.0, "label": "Corridor wall",
+    }).json()
+    wall = project["floors"][0]["walls"][0]
+    assert wall["label"] == "Corridor wall"
+    assert wall["thickness_mm"] == 200
+
+    project = client.patch(f"/api/floors/{floor_id}/walls/{wall['id']}",
+                           json={"material": "lead", "thickness_mm": 3}).json()
+    assert project["floors"][0]["walls"][0]["material"] == "lead"
+    # The geometry is preserved through an edit.
+    assert project["floors"][0]["walls"][0]["p1"] == [0, -50]
+
+    project = client.delete(f"/api/floors/{floor_id}/walls/{wall['id']}").json()
+    assert project["floors"][0]["walls"] == []
+
+
+def test_wall_validation_is_enforced(client):
+    floor_id, _, _ = wall_scenario(client)
+    assert client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, 0], "p2": [10, 0], "thickness_mm": 0}).status_code == 400
+    assert client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, 0], "p2": [10, 0], "base_height_m": 3, "top_height_m": 1}).status_code == 400
+
+
+def test_drawn_wall_attenuates_the_dose_and_shows_in_results(client):
+    floor_id, source_id, poi_id = wall_scenario(client)
+    before = client.get("/api/results").json()["results"][0]
+    bare_thickness = before["governing_thickness_mm"]["lead"]
+
+    client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete",
+        "thickness_mm": 200, "top_height_m": 3.0, "label": "Corridor wall",
+    })
+
+    after = client.get("/api/results").json()["results"][0]
+    contribution = after["contributions"][0]
+    assert contribution["path_transmission"] < 1.0
+    assert contribution["value"] < contribution["unshielded_value"]
+    assert contribution["barriers"][0]["label"] == "Corridor wall"
+    assert after["governing_thickness_mm"]["lead"] < bare_thickness
+
+
+def test_barriers_endpoint_lists_the_path_before_calculating(client):
+    floor_id, source_id, poi_id = wall_scenario(client)
+    client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete", "thickness_mm": 200,
+        "top_height_m": 3.0, "label": "Corridor wall"})
+    link = client.get("/api/barriers").json()["points"][0]["links"][0]
+    assert link["label"] == "Uptake room"
+    assert [b["label"] for b in link["barriers"]] == ["Corridor wall"]
+    assert link["barriers"][0]["drawn"] is True
+
+
+def test_named_barrier_declared_for_one_path(client):
+    floor_id, source_id, poi_id = wall_scenario(client)
+    before = client.get("/api/results").json()["results"][0]["methods"][0]["total"]
+
+    client.patch(f"/api/pois/{poi_id}", json={"manual_barriers": {
+        source_id: [{"material": "lead", "thickness_mm": 3.0, "label": "Leaded door"}]}})
+
+    result = client.get("/api/results").json()["results"][0]
+    assert result["methods"][0]["total"] < before
+    barrier = result["contributions"][0]["barriers"][0]
+    assert barrier["label"] == "Leaded door"
+    assert barrier["wall_id"] is None
+
+    link = client.get("/api/barriers").json()["points"][0]["links"][0]
+    assert link["barriers"][0]["drawn"] is False
+
+
+def test_named_barrier_validation(client):
+    _, source_id, poi_id = wall_scenario(client)
+    assert client.patch(f"/api/pois/{poi_id}", json={"manual_barriers": {
+        source_id: [{"material": "lead", "thickness_mm": -1}]}}).status_code == 400
+    assert client.patch(f"/api/pois/{poi_id}", json={"manual_barriers": {
+        source_id: [{"material": "lead", "thickness_mm": "thick"}]}}).status_code == 400
+
+
+def test_obliquity_toggle_changes_the_result(client):
+    """A wall crossed at an angle presents more material once obliquity is on."""
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    calibrate(client, floor_id, metres_per_unit=0.1)
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    project = client.post("/api/sources", json={
+        "floor_id": floor_id, "x": -10, "y": -10, "height_above_floor_m": 1.0,
+        "params": {"kind": "uptake", "nuclide": "F-18",
+                   "administered_activity_MBq": 555, "patients_per_week": 40,
+                   "uptake_time_h": 1.0},
+    }).json()
+    client.post("/api/pois", json={
+        "floor_id": floor_id, "x": 10, "y": 10, "auto_height": False,
+        "height_above_floor_m": 1.0,
+        "linked_source_ids": [project["sources"][0]["id"]],
+    })
+    client.post("/api/materials", json={"materials": ["lead"]})
+    client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete", "thickness_mm": 50,
+        "top_height_m": 3.0})
+
+    straight = client.get("/api/results").json()["results"][0]
+    client.post("/api/project/obliquity", json={"enabled": True})
+    oblique = client.get("/api/results").json()["results"][0]
+
+    assert oblique["contributions"][0]["barriers"][0]["angle_deg"] == pytest.approx(45, abs=1)
+    assert oblique["contributions"][0]["barriers"][0]["oblique"] is True
+    assert (oblique["contributions"][0]["path_transmission"]
+            < straight["contributions"][0]["path_transmission"])
+    assert oblique["governing_thickness_mm"]["lead"] < straight["governing_thickness_mm"]["lead"]
+
+
+def test_walls_survive_save_and_reopen(client, tmp_path):
+    floor_id, source_id, poi_id = wall_scenario(client)
+    client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete", "thickness_mm": 200,
+        "top_height_m": 3.4, "label": "Corridor wall"})
+    client.patch(f"/api/pois/{poi_id}", json={"manual_barriers": {
+        source_id: [{"material": "lead", "thickness_mm": 3.0, "label": "Leaded door"}]}})
+    client.post("/api/project/obliquity", json={"enabled": True})
+
+    path = tmp_path / "walls.rsproj"
+    client.post("/api/project/save", json={"path": str(path)})
+    client.post("/api/project/new")
+    reopened = client.post("/api/project/load", json={"path": str(path)}).json()
+
+    wall = reopened["floors"][0]["walls"][0]
+    assert (wall["label"], wall["thickness_mm"], wall["top_height_m"]) == ("Corridor wall", 200, 3.4)
+    assert reopened["pois"][0]["manual_barriers"][source_id][0]["label"] == "Leaded door"
+    assert reopened["apply_obliquity"] is True
+
+
+def test_csv_records_barriers_and_path_transmission(client):
+    floor_id, source_id, poi_id = wall_scenario(client)
+    client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete", "thickness_mm": 200,
+        "top_height_m": 3.0, "label": "Corridor wall"})
+    rows = list(csv.DictReader(io.StringIO(client.get("/api/results.csv").text)))
+    source_row = next(row for row in rows if row["row_type"] == "source")
+    assert "Corridor wall" in source_row["barriers"]
+    assert float(source_row["path_transmission"]) < 1.0
+    assert float(source_row["path_lead_equivalent_mm"]) > 0
+    assert float(source_row["unshielded_value"]) > float(source_row["value"])
+
+
+def test_deleting_a_source_clears_its_named_barriers(client):
+    _, source_id, poi_id = wall_scenario(client)
+    client.patch(f"/api/pois/{poi_id}", json={"manual_barriers": {
+        source_id: [{"material": "lead", "thickness_mm": 3.0}]}})
+    project = client.delete(f"/api/sources/{source_id}").json()
+    assert project["pois"][0]["manual_barriers"] == {}

@@ -184,7 +184,53 @@ published ~0.27 mm, and transmission at 0.25 mm and 1.0 mm lands on the
 published curve. When NCRP 147's Section 5 examples become available they
 should be added as end-to-end fixtures, matching the TG-108 test file.
 
-## 4. Summing sources at a point
+## 4. Barriers on a path
+
+A wall drawn on a plan is a vertical rectangle: its plan segment extruded
+between a base and top height above its own floor.  A source-to-point path is
+tested against every wall on every floor, and the height band does the
+filtering, so one test serves both within-storey and between-storey paths --
+a 3 m partition simply is not in the way of a ray that has already climbed
+above it on its way to the floor above.  Barriers may also be declared by name
+against a specific source-point pair, for structure that is not on the drawing
+(a slab, a leaded door, a control window).
+
+### Reducing a stack of barriers
+
+Where a path crosses more than one barrier, the barriers are converted to the
+equivalent thickness of a single reference material (lead), summed, and the
+Archer fit applied **once**.
+
+The tempting alternative -- computing each barrier's transmission separately
+and multiplying them -- is wrong in the unsafe direction.  The fits already
+embed build-up for a single barrier, and multiplying them ignores the beam
+hardening that occurs between layers: the second barrier attenuates a spectrum
+the first has already filtered, so it removes proportionally less than its
+own fit predicts.  Multiplying therefore understates what gets through, which
+overstates the protection achieved.
+
+A barrier whose material the active methodology cannot attenuate (gypsum at
+511 keV, for instance) is dropped with a warning rather than approximated.
+Dropping a barrier understates shielding, so the result stays conservative,
+and the warning appears in the audit trail.
+
+### Attenuation is per path, not per point
+
+Each source's dose is attenuated by the barriers on *its own* path before the
+doses are summed.  This is what allows one source to reach a point through a
+shielded wall while another nearby source reaches the same point unobstructed
+-- the common case in practice, and one a single per-point credit cannot
+express.
+
+### Obliquity
+
+A path crossing a barrier at angle theta from the normal traverses
+``t / cos(theta)`` rather than ``t``.  This correction is available as a
+toggle and is **off** by default: ignoring it under-counts material, so the
+default errs safe and matches a hand calculation.  When enabled, the angle and
+the corrected thickness both appear in the results.
+
+## 5. Summing sources at a point
 
 Where several sources are incident on one point, their unshielded doses are
 summed *before* the transmission factor is derived — TG-108 Table VII does

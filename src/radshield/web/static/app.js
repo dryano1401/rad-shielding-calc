@@ -15,6 +15,8 @@ const state = {
   images: new Map(),        // floorId -> HTMLImageElement
   calibrationPick: [],      // points collected by the calibrate tool
   measurePick: [],          // points collected by the measure tool
+  wallPick: [],             // points collected by the wall tool
+  barriers: null,           // /api/barriers payload
   hover: null,              // cursor position in PDF space, for rubber banding
   distances: null,          // /api/distances payload, refreshed after edits
   drag: null,
@@ -55,6 +57,13 @@ function setProject(data) {
 /* ----------------------------------------------------------------- units */
 
 const METRES_PER = { ft: 0.3048, in: 0.0254, m: 1, cm: 0.01, mm: 0.001 };
+
+// Distinct hues per material so a plan reads at a glance.
+const MATERIAL_COLOUR = {
+  lead: '#b892ff', concrete: '#8fa6c4', iron: '#c98b6b', steel: '#c98b6b',
+  gypsum: '#e6d2a8', glass: '#7fd4e8', wood: '#c9a06b',
+};
+const materialColour = m => MATERIAL_COLOUR[m] || '#96a0b1';
 
 const displayUnit = () => state.project?.display_unit || 'ft';
 const toMetres = (value, unit) => value * METRES_PER[unit || displayUnit()];
@@ -181,10 +190,46 @@ function draw() {
       drawPoints(other, 0.28);
     }
   }
+  drawWalls(floor);
   drawLinks(floor);
   drawMeasurements(floor);
   drawPoints(floor, 1);
   drawCalibration(floor);
+}
+
+function drawWalls(floor) {
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const wall of floor.walls || []) {
+    const a = toScreen(wall.p1[0], wall.p1[1]);
+    const b = toScreen(wall.p2[0], wall.p2[1]);
+    // Thickness is drawn to scale where possible so a 200 mm wall looks like one.
+    const scaled = floor.metres_per_unit
+      ? (wall.thickness_mm / 1000) / floor.metres_per_unit * RENDER_ZOOM * state.view.scale
+      : 5;
+    ctx.strokeStyle = materialColour(wall.material);
+    ctx.lineWidth = Math.max(scaled, 3);
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  if (state.tool === 'wall' && state.wallPick.length === 1 && state.hover) {
+    const a = toScreen(state.wallPick[0].x, state.wallPick[0].y);
+    const b = toScreen(state.hover.x, state.hover.y);
+    ctx.strokeStyle = materialColour(document.getElementById('wall-material').value);
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = 0.6;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
 }
 
 function drawMeasurements(floor) {
@@ -409,6 +454,14 @@ canvas.addEventListener('mousemove', event => {
   const floor = currentFloor();
   state.hover = floor ? eventPdf(event) : null;
 
+  if (state.tool === 'wall' && state.wallPick.length === 1 && state.hover) {
+    const metres = pdfSegmentMetres(floor, state.wallPick[0], state.hover);
+    setStatus(metres === null
+      ? 'This floor has no scale yet — set the scale before drawing walls.'
+      : `Wall length: ${formatLength(metres)} — click to place, Esc to cancel.`);
+    draw();
+  }
+
   if (state.tool === 'measure' && state.measurePick.length === 1 && state.hover) {
     const metres = pdfSegmentMetres(floor, state.measurePick[0], state.hover);
     setStatus(metres === null
@@ -504,6 +557,36 @@ canvas.addEventListener('click', async event => {
     return;
   }
 
+  if (state.tool === 'wall') {
+    if (!floor.metres_per_unit) {
+      alert('Set the scale on this floor before drawing walls.');
+      return;
+    }
+    state.wallPick.push(pdf);
+    if (state.wallPick.length < 2) {
+      setStatus('Click the far end of the wall.');
+      draw();
+      return;
+    }
+    const [p1, p2] = state.wallPick;
+    state.wallPick = [];
+    // Thickness is entered in the display unit; the model stores millimetres.
+    const entered = parseFloat(document.getElementById('wall-thickness').value);
+    const thicknessMm = displayUnit() === 'm'
+      ? entered * 1000
+      : toMetres(entered / 12) * 1000;   // feet mode: the field is inches
+    try {
+      setProject(await send(`/api/floors/${floor.id}/walls`, 'POST', {
+        p1: [p1.x, p1.y], p2: [p2.x, p2.y],
+        material: document.getElementById('wall-material').value,
+        thickness_mm: thicknessMm,
+        base_height_m: 0,
+        top_height_m: parseFloat(document.getElementById('wall-height').value) || 3.0,
+      }));
+    } catch (error) { alert(error.message); }
+    return;
+  }
+
   if (state.tool === 'align') {
     setProject(await send(`/api/floors/${floor.id}`, 'PATCH', { alignment: [pdf.x, pdf.y] }));
     setTool('select');
@@ -550,6 +633,7 @@ window.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   state.calibrationPick = [];
   state.measurePick = [];
+  state.wallPick = [];
   setStatus('Cancelled.');
   draw();
 });
@@ -558,6 +642,7 @@ function setTool(tool) {
   state.tool = tool;
   state.calibrationPick = [];
   state.measurePick = [];
+  state.wallPick = [];
   document.querySelectorAll('.tool').forEach(button => {
     button.classList.toggle('active', button.dataset.tool === tool);
   });
@@ -566,6 +651,7 @@ function setTool(tool) {
     calibrate: 'Click two points a known distance apart on this drawing.',
     align: 'Click a feature that appears on every floor (a column, stair core, lift shaft).',
     measure: 'Click two points to measure the distance between them, e.g. a wall standoff.',
+    wall: 'Click each end of the wall. It uses the material, thickness and height set on the left.',
     source: 'Click to place a radiation source.',
     poi: 'Click to place a point to be protected.',
   };
@@ -587,6 +673,7 @@ function select(selection) {
 function renderAll() {
   renderFloors();
   renderFloorSelect();
+  renderWalls();
   renderMeasurements();
   renderMaterials();
   renderPointList();
@@ -594,6 +681,57 @@ function renderAll() {
   renderProblems();
   draw();
   refreshDistances();
+}
+
+// Wall thickness is entered in inches in feet mode, millimetres in metric.
+const wallUnitLabel = () => (displayUnit() === 'm' ? 'millimetres' : 'inches');
+const wallThicknessDisplay = mm =>
+  displayUnit() === 'm' ? `${mm.toFixed(0)} mm` : `${(mm / 25.4).toFixed(2)}"`;
+
+function renderWalls() {
+  const select = document.getElementById('wall-material');
+  if (!select.options.length) {
+    for (const material of (state.options?.materials || [])) {
+      const option = document.createElement('option');
+      option.value = option.textContent = material;
+      select.appendChild(option);
+    }
+    select.value = 'concrete';
+  }
+  document.getElementById('wall-units').textContent = wallUnitLabel();
+
+  const list = document.getElementById('wall-list');
+  const floor = currentFloor();
+  list.innerHTML = '';
+  for (const wall of (floor?.walls || [])) {
+    const div = document.createElement('div');
+    div.className = 'wall';
+    div.innerHTML = `
+      <div class="top">
+        <span class="swatch" style="background:${materialColour(wall.material)}"></span>
+        <input class="name" type="text" value="${escapeHtml(wall.label)}"
+               placeholder="unnamed wall" data-w="label">
+        <button data-w="delete" title="Delete wall">×</button>
+      </div>
+      <div class="detail">
+        <select data-w="material">${(state.options?.materials || []).map(m =>
+          `<option ${wall.material === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
+        ${wallThicknessDisplay(wall.thickness_mm)} · top ${wall.top_height_m} m
+      </div>`;
+
+    const patch = async body => {
+      try { setProject(await send(`/api/floors/${floor.id}/walls/${wall.id}`, 'PATCH', body)); }
+      catch (error) { alert(error.message); }
+    };
+    div.querySelector('[data-w=label]').onchange = e => patch({ label: e.target.value });
+    div.querySelector('[data-w=material]').onchange = e => patch({ material: e.target.value });
+    div.querySelector('[data-w=delete]').onclick = async () =>
+      setProject(await api(`/api/floors/${floor.id}/walls/${wall.id}`, { method: 'DELETE' }));
+    list.appendChild(div);
+  }
+  if (!floor?.walls?.length) {
+    list.innerHTML = '<p class="hint">No walls on this floor yet.</p>';
+  }
 }
 
 function renderMeasurements() {
@@ -615,12 +753,16 @@ function renderMeasurements() {
   }
 }
 
-// Distances are fetched separately so they can be shown before calculating.
+// Distances and barriers are fetched separately so both can be shown before
+// anything is calculated.
 async function refreshDistances() {
   try {
-    state.distances = await api('/api/distances');
+    [state.distances, state.barriers] = await Promise.all([
+      api('/api/distances'), api('/api/barriers'),
+    ]);
   } catch (_) {
     state.distances = null;
+    state.barriers = null;
     return;
   }
   if (state.selection?.kind === 'poi') renderInspector();
@@ -847,11 +989,16 @@ function renderPoiInspector(title, box) {
     (state.distances?.points.find(p => p.poi_id === poi.id)?.links || [])
       .map(link => [link.source_id, link]));
 
+  const barrierInfo = new Map(
+    (state.barriers?.points.find(p => p.poi_id === poi.id)?.links || [])
+      .map(link => [link.source_id, link]));
+
   const links = state.project.sources.map(source => {
     const floor = state.project.floors.find(f => f.id === source.floor_id);
     const checked = poi.linked_source_ids.includes(source.id);
     const info = distanceInfo.get(source.id);
     const override = poi.distance_overrides?.[source.id];
+    const path = barrierInfo.get(source.id);
 
     let detail = '';
     if (checked && info) {
@@ -877,12 +1024,30 @@ function renderPoiInspector(title, box) {
       }
     }
 
+    let barrierBlock = '';
+    if (checked) {
+      const found = path?.barriers || [];
+      barrierBlock = found.length
+        ? `<div class="barrier-list">${found.map(b => `
+            <div class="barrier ${b.drawn ? '' : 'manual'}">
+              ${escapeHtml(b.label)} — ${wallThicknessDisplay(b.effective_thickness_mm)}
+              ${escapeHtml(b.material)}${b.drawn ? ` on ${escapeHtml(b.floor_name)}` : ' (named)'}
+              ${b.oblique ? `<span class="oblique">· ${b.angle_deg}° oblique</span>` : ''}
+            </div>`).join('')}</div>`
+        : '<div class="no-barrier">No barrier on this path.</div>';
+      barrierBlock += `<div class="override">
+          <button data-add-barrier="${source.id}">Add named barrier</button>
+          ${(poi.manual_barriers?.[source.id] || []).length
+            ? `<button data-clear-barrier="${source.id}">Clear named</button>` : ''}
+        </div>`;
+    }
+
     return `<div class="link-row">
       <div class="top">
         <label><input type="checkbox" data-link="${source.id}" ${checked ? 'checked' : ''}>
           ${escapeHtml(source.label || source.id)}
           <span class="where">(${escapeHtml(floor?.name || '?')})</span></label>
-      </div>${detail}</div>`;
+      </div>${detail}${barrierBlock}</div>`;
   }).join('') || '<p class="hint">No sources placed yet.</p>';
 
   box.innerHTML = `
@@ -928,6 +1093,33 @@ function renderPoiInspector(title, box) {
       const chosen = [...box.querySelectorAll('[data-link]')]
         .filter(i => i.checked).map(i => i.dataset.link);
       setProject(await send(`/api/pois/${poi.id}`, 'PATCH', { linked_source_ids: chosen }));
+    };
+  });
+
+  box.querySelectorAll('[data-add-barrier]').forEach(button => {
+    button.onclick = async () => {
+      const material = prompt(
+        `Barrier material (${(state.options?.materials || []).join(', ')}):`, 'lead');
+      if (!material) return;
+      const entered = parseFloat(prompt(
+        `Thickness in ${wallUnitLabel()}:`, displayUnit() === 'm' ? '2' : '0.08'));
+      if (!entered || entered <= 0) return;
+      const thicknessMm = displayUnit() === 'm' ? entered : entered * 25.4;
+      const label = prompt('Name this barrier (optional):', '') || '';
+      const declared = { ...(poi.manual_barriers || {}) };
+      const sourceId = button.dataset.addBarrier;
+      declared[sourceId] = [...(declared[sourceId] || []),
+                            { material, thickness_mm: thicknessMm, label }];
+      try { setProject(await send(`/api/pois/${poi.id}`, 'PATCH', { manual_barriers: declared })); }
+      catch (error) { alert(error.message); }
+    };
+  });
+
+  box.querySelectorAll('[data-clear-barrier]').forEach(button => {
+    button.onclick = async () => {
+      const declared = { ...(poi.manual_barriers || {}) };
+      delete declared[button.dataset.clearBarrier];
+      setProject(await send(`/api/pois/${poi.id}`, 'PATCH', { manual_barriers: declared }));
     };
   });
 
@@ -1017,7 +1209,12 @@ async function calculate() {
           contribution.geometric_distance_m
             ? ` <span class="tag need">entered</span>` : ''}</td>
         <td class="num">${fmt(contribution.value)} ${contribution.quantity.includes('uSv') ? 'µSv' : 'mGy'}</td>
-        <td class="num"></td>${materials.map(() => '<td></td>').join('')}<td></td></tr>`;
+        <td class="num">${contribution.path_transmission < 1
+          ? `<span class="tag need">×${contribution.path_transmission.toFixed(3)}</span>` : ''}</td>
+        ${materials.map(() => '<td></td>').join('')}
+        <td>${contribution.barriers.length
+          ? `${contribution.barriers.length} barrier(s), ${contribution.path_equivalent_mm.toFixed(1)} mm Pb eq`
+          : ''}</td></tr>`;
     }
     for (const method of result.methods) {
       const transmission = method.required_transmission;
@@ -1065,6 +1262,10 @@ document.getElementById('btn-zoom-in').onclick = () => zoomBy(1.25);
 document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / 1.25);
 document.getElementById('btn-zoom-fit').onclick = () => { fitToView(); draw(); };
 document.getElementById('ghost').onchange = event => { state.ghost = event.target.checked; draw(); };
+document.getElementById('obliquity').onchange = async event => {
+  setProject(await send('/api/project/obliquity', 'POST', { enabled: event.target.checked }));
+  if (state.results) calculate();
+};
 document.getElementById('btn-calculate').onclick = () => calculate().catch(e => alert(e.message));
 
 document.getElementById('btn-add-floor').onclick = () => document.getElementById('pdf-file').click();
@@ -1128,5 +1329,6 @@ window.addEventListener('resize', () => draw());
   setProject(await api('/api/project'));
   document.getElementById('project-name').value = state.project.name;
   document.getElementById('display-unit').value = displayUnit();
+  document.getElementById('obliquity').checked = !!state.project.apply_obliquity;
   setTool('select');
 })();

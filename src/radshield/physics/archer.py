@@ -114,6 +114,26 @@ def thickness(params: ArcherParams, b: float) -> float:
     return max(x, 0.0)
 
 
+def equivalent_thickness(
+    params_from: ArcherParams, thickness_from: float, params_to: ArcherParams
+) -> float:
+    """Thickness of one material giving the same transmission as another.
+
+    Equivalence is defined by equal broad-beam transmission at the radiation
+    quality the two parameter sets describe, which is what lets a stack of
+    dissimilar barriers be reduced to a single reference material.  Both
+    thicknesses are in their own parameter set's unit.
+
+    Reducing a stack this way, then applying the fit once, is preferable to
+    multiplying each barrier's transmission together: the fits already embed
+    build-up for a single barrier, and multiplying them ignores the beam
+    hardening that occurs between layers -- which errs towards claiming more
+    protection than exists.
+    """
+    b = transmission(params_from, thickness_from)
+    return thickness(params_to, b)
+
+
 def equilibrium_hvl(params: ArcherParams) -> float:
     """Half-value layer in the thick-barrier limit, ln(2)/alpha, in ``params.unit``."""
     return math.log(2.0) / params.alpha

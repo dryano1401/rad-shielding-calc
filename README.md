@@ -18,10 +18,11 @@ This repository currently contains the calculation core.
 | 3. Point placement and metadata | **complete** |
 | 4. Multi-floor 3D geometry | **complete** |
 | 5. Results, audit trail, CSV export | **complete** |
-| 6. NCRP 147 CT scatter constants | needs source data |
-| 7. Barrier objects, report export | not started |
+| 6. Wall barriers and path attenuation | **complete** |
+| 7. NCRP 147 CT scatter constants | needs source data |
+| 8. Formatted report export | not started |
 
-145 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+178 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
 
 ## Install and run
 
@@ -56,12 +57,23 @@ needed for the GUI.
    value into the box to override the drawing geometry — useful when the path is
    not what the plan implies. The entered figure and the geometric one it replaced
    both appear in the results and the CSV, and a discrepancy over 25% is flagged.
-7. **Calculate.** Every source linked to a point contributes and their doses are
+7. **Draw walls.** The *Draw wall* tool lays a wall down with the material,
+   thickness and height set on the left. Any path that passes through it is
+   attenuated by it. Height matters: a 3 m partition blocks a path across the
+   room but not one climbing to the storey above, while a shaft wall carried up
+   blocks both. Barriers not worth drawing — a slab, a leaded door — can be
+   declared by name against a single source-point pair instead.
+8. **Calculate.** Every source linked to a point contributes and their doses are
    summed before the barrier is solved. Expand the detail row to see every
    intermediate value, or export the CSV.
 
 Distances display in feet-and-inches or metres — the toggle is in the header.
 The metric value is always shown alongside, since the physics works in metres.
+Wall thickness is entered in inches in feet mode, millimetres in metric.
+
+The *Obliquity* toggle scales a barrier's thickness by `1/cos(angle)` for paths
+crossing at an angle. It is off by default, which under-counts material and so
+errs safe; turn it on to see the difference.
 
 ## Use
 

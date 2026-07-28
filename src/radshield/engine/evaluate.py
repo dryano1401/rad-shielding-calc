@@ -13,9 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..model.geometry import Distance, distance, format_length
+from ..model.geometry import Crossing, Distance, distance, format_length, path_barriers
 from ..model.project import PointOfInterest, Project, SourcePoint
-from ..physics import tg108
+from ..physics import nuclides, tg108
+from ..physics.archer import equivalent_thickness as archer_equivalent
+from ..physics.archer import thickness as archer_thickness
+from ..physics.archer import transmission as archer_transmission
 from ..physics.limits import ncrp147_goal, tg108_goal
 from ..physics.ncrp147 import barriers as ncrp_barriers
 from ..physics.ncrp147 import ct as ncrp_ct
@@ -41,6 +44,10 @@ class SourceContribution:
     terms: dict[str, float] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     geometric_distance_m: float | None = None
+    unshielded_value: float = 0.0
+    barriers: list[dict[str, Any]] = field(default_factory=list)
+    path_transmission: float = 1.0
+    path_equivalent_mm: float = 0.0
 
 
 @dataclass
@@ -143,17 +150,94 @@ def _optional_float(value: Any) -> float | None:
     return float(value)
 
 
+def _native_thickness(thickness_mm: float, unit: str) -> float:
+    """Convert millimetres to the unit an Archer parameter set is tabulated in."""
+    return thickness_mm if unit == "mm" else thickness_mm / 10.0
+
+
+# Reference material a barrier stack is reduced to before the fit is applied.
+# Lead is tabulated by both methodologies, so it always resolves.
+REFERENCE_MATERIAL = "lead"
+
+
+def _path_attenuation(
+    crossings: list[Crossing], params_for: Any
+) -> tuple[float, float, list[dict[str, Any]], list[str]]:
+    """Reduce a stack of barriers to one reference thickness and its transmission.
+
+    Each barrier is converted to the equivalent thickness of the reference
+    material, the equivalents are summed, and the fit is applied once.  This
+    is preferred over multiplying the barriers' individual transmissions,
+    which ignores beam hardening between layers and would overstate the
+    protection achieved.
+
+    Barriers whose material the active methodology cannot attenuate are
+    dropped with a warning rather than guessed at; dropping a barrier
+    understates shielding, so the result stays conservative.
+
+    Returns:
+        ``(transmission, equivalent_mm, details, warnings)``.
+    """
+    warnings: list[str] = []
+    details: list[dict[str, Any]] = []
+    if not crossings:
+        return 1.0, 0.0, details, warnings
+
+    try:
+        reference = params_for(REFERENCE_MATERIAL)
+    except Exception as exc:
+        return 1.0, 0.0, details, [f"no reference transmission data available: {exc}"]
+
+    total_equivalent = 0.0
+    for crossing in crossings:
+        try:
+            params = params_for(crossing.material)
+        except Exception as exc:
+            warnings.append(
+                f"{crossing.label}: no transmission data for {crossing.material!r} under this "
+                f"methodology, so the barrier was ignored (conservative). {exc}"
+            )
+            continue
+        native = _native_thickness(crossing.effective_thickness_mm, params.unit)
+        equivalent = archer_equivalent(params, native, reference)
+        total_equivalent += equivalent
+        details.append(
+            {
+                "label": crossing.label,
+                "material": crossing.material,
+                "thickness_mm": round(crossing.thickness_mm, 2),
+                "effective_thickness_mm": round(crossing.effective_thickness_mm, 2),
+                "angle_deg": round(crossing.angle_deg, 1),
+                "oblique": crossing.is_oblique,
+                "equivalent_mm": round(
+                    equivalent * (1.0 if reference.unit == "mm" else 10.0), 3
+                ),
+                "equivalent_material": REFERENCE_MATERIAL,
+                "wall_id": crossing.wall_id,
+                "floor_name": crossing.floor_name,
+            }
+        )
+
+    if total_equivalent <= 0:
+        return 1.0, 0.0, details, warnings
+
+    transmission = archer_transmission(reference, total_equivalent)
+    equivalent_mm = total_equivalent * (1.0 if reference.unit == "mm" else 10.0)
+    return transmission, equivalent_mm, details, warnings
+
+
 def _solve_tg108(
+    project: Project,
     poi: PointOfInterest,
     pairs: list[tuple[SourcePoint, Distance]],
     materials: list[str],
 ) -> tuple[MethodResult, list[SourceContribution]]:
-    """Sum TG-108 doses at the point and solve for thickness."""
+    """Attenuate each TG-108 source by its own path, sum, then solve."""
     goal = tg108_goal(poi.area_class)
-    physics_pairs = [(_tg108_source(src), d.metres) for src, d in pairs]
 
     nuclide_names = {src.params.get("nuclide", "F-18") for src, _ in pairs}
     attenuation_nuclide = "F-18" if len(nuclide_names) > 1 else next(iter(nuclide_names))
+    params_for = lambda material: nuclides.get_archer(attenuation_nuclide, material)
 
     usable = [m for m in materials if m in TG108_MATERIALS]
     unavailable = {
@@ -162,43 +246,58 @@ def _solve_tg108(
         if m not in TG108_MATERIALS
     }
 
-    result = tg108.solve_barrier(
-        sources=physics_pairs,
-        goal=goal,
-        occupancy=poi.occupancy,
-        materials=usable,
-        nuclide_for_attenuation=attenuation_nuclide,
-        existing_barriers={
-            m: poi.existing_thickness
-            for m in usable
-            if poi.existing_material == m and poi.existing_thickness > 0
-        },
-    )
-
-    contributions = [
-        SourceContribution(
-            source_id=src.id,
-            label=src.label or src.id,
-            method="tg108",
-            distance_m=d.metres,
-            quantity="uSv/week",
-            value=dose.weekly_dose_uSv,
-            terms=dose.terms,
-            notes=list(dose.notes) + d.notes,
-            geometric_distance_m=d.geometric_m,
+    contributions: list[SourceContribution] = []
+    total = 0.0
+    for src, dist in pairs:
+        dose = tg108.weekly_dose(_tg108_source(src), dist.metres)
+        crossings, geometry_warnings = path_barriers(
+            project, src, poi, apply_obliquity=project.apply_obliquity
         )
-        for (src, d), dose in zip(pairs, result.per_source)
-    ]
+        b_path, equivalent_mm, details, barrier_warnings = _path_attenuation(
+            crossings, params_for
+        )
+        attenuated = dose.weekly_dose_uSv * b_path
+        total += attenuated
 
-    thickness_mm = {
-        m: result.thickness_by_material[m] * _MM_PER_UNIT[result.thickness_unit[m]] for m in usable
-    }
+        notes = list(dose.notes) + dist.notes + geometry_warnings + barrier_warnings
+        if details:
+            notes.append(
+                f"path crosses {len(details)} barrier(s), "
+                f"{equivalent_mm:.2f} mm lead equivalent, transmission {b_path:.4g}"
+            )
+        contributions.append(
+            SourceContribution(
+                source_id=src.id,
+                label=src.label or src.id,
+                method="tg108",
+                distance_m=dist.metres,
+                quantity="uSv/week",
+                value=attenuated,
+                unshielded_value=dose.weekly_dose_uSv,
+                terms=dose.terms,
+                notes=notes,
+                geometric_distance_m=dist.geometric_m,
+                barriers=details,
+                path_transmission=b_path,
+                path_equivalent_mm=equivalent_mm,
+            )
+        )
+
+    b_required = tg108.required_transmission(total, goal, poi.occupancy)
+
+    thickness_mm: dict[str, float] = {}
+    for material in usable:
+        params = params_for(material)
+        gross = archer_thickness(params, b_required) if b_required < 1.0 else 0.0
+        gross_mm = gross * (1.0 if params.unit == "mm" else 10.0)
+        thickness_mm[material] = max(gross_mm - _existing_credit_mm(poi, material, params.unit), 0.0)
+
     return (
         MethodResult(
             method="tg108",
             quantity="effective dose equivalent (uSv/week)",
-            total=result.total_weekly_dose_uSv,
-            required_transmission=result.required_transmission,
+            total=total,
+            required_transmission=b_required,
             thickness_mm=thickness_mm,
             unavailable=unavailable,
         ),
@@ -207,41 +306,62 @@ def _solve_tg108(
 
 
 def _solve_ncrp147(
+    project: Project,
     poi: PointOfInterest,
     pairs: list[tuple[SourcePoint, Distance]],
     materials: list[str],
 ) -> tuple[MethodResult, list[SourceContribution]]:
-    """Sum NCRP 147 kermas at the point and solve for thickness."""
+    """Attenuate each NCRP 147 source by its own path, sum, then solve."""
     goal = ncrp147_goal(poi.area_class)
-    evaluated: list[Any] = []
+    evaluated: list[tuple[Any, bool]] = []
     contributions: list[SourceContribution] = []
-    ct_results: list[ncrp_ct.CTBarrierResult] = []
 
-    for src, d in pairs:
-        if src.method == "ncrp147_ct":
-            inputs = _ct_inputs(src, d.metres, poi.occupancy)
+    for src, dist in pairs:
+        is_ct = src.method == "ncrp147_ct"
+        if is_ct:
+            inputs = _ct_inputs(src, dist.metres, poi.occupancy)
             res = ncrp_ct.evaluate(inputs, goal)
-            ct_results.append(res)
+            params_for = lambda material, i=inputs: ncrp_ct.barrier_params(i, material)
         else:
-            inputs = _ncrp_inputs(src, d.metres, poi.occupancy)
+            inputs = _ncrp_inputs(src, dist.metres, poi.occupancy)
             res = ncrp_barriers.evaluate(inputs, goal)
-            evaluated.append(res)
+            params_for = lambda material, i=inputs: ncrp_barriers.barrier_params(i, material)
+        evaluated.append((res, is_ct))
+
+        crossings, geometry_warnings = path_barriers(
+            project, src, poi, apply_obliquity=project.apply_obliquity
+        )
+        b_path, equivalent_mm, details, barrier_warnings = _path_attenuation(
+            crossings, params_for
+        )
+        attenuated = res.unshielded_weekly_kerma_mGy * b_path
+
+        notes = list(res.notes) + dist.notes + geometry_warnings + barrier_warnings
+        if details:
+            notes.append(
+                f"path crosses {len(details)} barrier(s), "
+                f"{equivalent_mm:.2f} mm lead equivalent, transmission {b_path:.4g}"
+            )
         contributions.append(
             SourceContribution(
                 source_id=src.id,
                 label=src.label or src.id,
                 method=src.method,
-                distance_m=d.metres,
+                distance_m=dist.metres,
                 quantity="mGy/week",
-                value=res.unshielded_weekly_kerma_mGy,
+                value=attenuated,
+                unshielded_value=res.unshielded_weekly_kerma_mGy,
                 terms=res.terms,
-                notes=list(res.notes) + d.notes,
-                geometric_distance_m=d.geometric_m,
+                notes=notes,
+                geometric_distance_m=dist.geometric_m,
+                barriers=details,
+                path_transmission=b_path,
+                path_equivalent_mm=equivalent_mm,
             )
         )
 
     total = sum(c.value for c in contributions)
-    b = float("inf") if total <= 0 else goal.value / (poi.occupancy * total)
+    b_required = float("inf") if total <= 0 else goal.value / (poi.occupancy * total)
 
     thickness_mm: dict[str, float] = {}
     unavailable: dict[str, str] = {}
@@ -249,20 +369,20 @@ def _solve_ncrp147(
         if material not in NCRP147_MATERIALS:
             unavailable[material] = "not an NCRP 147 tabulated material"
             continue
-        credit = _existing_credit_mm(poi, material, "mm")
+        if b_required >= 1.0:
+            thickness_mm[material] = 0.0
+            continue
         try:
             candidates = [
-                ncrp_barriers.required_thickness([res], material, existing_thickness_mm=0.0)
-                if b >= 1.0
-                else _thickness_for(res, material, b)
-                for res in evaluated
-            ]
-            candidates += [
-                0.0 if b >= 1.0 else _ct_thickness_for(res, material, b) for res in ct_results
+                _ct_thickness_for(res, material, b_required)
+                if is_ct
+                else _thickness_for(res, material, b_required)
+                for res, is_ct in evaluated
             ]
         except ncrp_tables.TableLookupError as exc:
             unavailable[material] = str(exc)
             continue
+        credit = _existing_credit_mm(poi, material, "mm")
         thickness_mm[material] = max(max(candidates, default=0.0) - credit, 0.0)
 
     return (
@@ -270,7 +390,7 @@ def _solve_ncrp147(
             method="ncrp147",
             quantity="air kerma (mGy/week)",
             total=total,
-            required_transmission=b,
+            required_transmission=b_required,
             thickness_mm=thickness_mm,
             unavailable=unavailable,
         ),
@@ -336,7 +456,7 @@ def evaluate_point(project: Project, poi: PointOfInterest) -> PointResult:
             continue
         try:
             solver = _solve_tg108 if group == "tg108" else _solve_ncrp147
-            method_result, contributions = solver(poi, pairs, project.materials)
+            method_result, contributions = solver(project, poi, pairs, project.materials)
         except Exception as exc:
             result.errors.append(f"{group}: {exc}")
             continue
@@ -414,6 +534,48 @@ def describe_distances(project: Project) -> list[dict[str, Any]]:
     return report
 
 
+def describe_barriers(project: Project) -> list[dict[str, Any]]:
+    """Per point, the barriers on the path from each linked source.
+
+    Purely geometric, so the interface can show which walls are in the way
+    before any calculation runs.  Equivalent thicknesses are not computed here
+    because they depend on the methodology evaluating the path.
+    """
+    report: list[dict[str, Any]] = []
+    for poi in project.pois:
+        links: list[dict[str, Any]] = []
+        for source_id in poi.linked_source_ids:
+            entry: dict[str, Any] = {"source_id": source_id}
+            try:
+                source = project.source(source_id)
+            except KeyError:
+                entry["error"] = "source no longer exists"
+                links.append(entry)
+                continue
+            entry["label"] = source.label or source.id
+            crossings, warnings = path_barriers(
+                project, source, poi, apply_obliquity=project.apply_obliquity
+            )
+            entry["warnings"] = warnings
+            entry["barriers"] = [
+                {
+                    "label": c.label,
+                    "material": c.material,
+                    "thickness_mm": round(c.thickness_mm, 2),
+                    "effective_thickness_mm": round(c.effective_thickness_mm, 2),
+                    "angle_deg": round(c.angle_deg, 1),
+                    "oblique": c.is_oblique,
+                    "wall_id": c.wall_id,
+                    "floor_name": c.floor_name,
+                    "drawn": c.wall_id is not None,
+                }
+                for c in crossings
+            ]
+            links.append(entry)
+        report.append({"poi_id": poi.id, "label": poi.label or poi.id, "links": links})
+    return report
+
+
 def results_to_rows(results: list[PointResult], materials: list[str]) -> list[dict[str, Any]]:
     """Flatten results into CSV-ready rows, one per source contribution.
 
@@ -440,6 +602,13 @@ def results_to_rows(results: list[PointResult], materials: list[str]) -> list[di
                     "value": round(contribution.value, 4),
                     "occupancy": res.occupancy,
                     "area_class": res.area_class,
+                    "unshielded_value": round(contribution.unshielded_value, 4),
+                    "path_transmission": round(contribution.path_transmission, 5),
+                    "path_lead_equivalent_mm": round(contribution.path_equivalent_mm, 3),
+                    "barriers": " + ".join(
+                        f"{b['label']} {b['effective_thickness_mm']:g} mm {b['material']}"
+                        for b in contribution.barriers
+                    ),
                 }
             )
         for method in res.methods:

@@ -18,16 +18,23 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from ..engine.evaluate import describe_distances, evaluate_project, results_to_rows
+from ..engine.evaluate import (
+    describe_barriers,
+    describe_distances,
+    evaluate_project,
+    results_to_rows,
+)
 from ..model.geometry import check_project, format_length, measurement_length
 from ..model.project import (
     LENGTH_UNITS,
+    Barrier,
     Calibration,
     Floor,
     Measurement,
     PointOfInterest,
     Project,
     SourcePoint,
+    Wall,
     new_id,
 )
 from ..model.store import load as load_project
@@ -271,6 +278,80 @@ def delete_measurement(floor_id: str, measurement_id: str) -> dict[str, Any]:
     return _project_payload()
 
 
+@app.post("/api/floors/{floor_id}/walls")
+def add_wall(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Draw a wall on a floor, with its material, thickness and height."""
+    try:
+        floor = session.project.floor(floor_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    try:
+        wall = Wall(
+            id=new_id("wall"),
+            p1=tuple(payload["p1"]),
+            p2=tuple(payload["p2"]),
+            material=payload.get("material", "concrete"),
+            thickness_mm=float(payload.get("thickness_mm", 150.0)),
+            base_height_m=float(payload.get("base_height_m", 0.0)),
+            top_height_m=float(payload.get("top_height_m", 3.0)),
+            label=payload.get("label", ""),
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    floor.walls.append(wall)
+    return _project_payload()
+
+
+@app.patch("/api/floors/{floor_id}/walls/{wall_id}")
+def update_wall(floor_id: str, wall_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Change a wall's material, thickness, height or label."""
+    try:
+        floor = session.project.floor(floor_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    wall = next((w for w in floor.walls if w.id == wall_id), None)
+    if wall is None:
+        raise HTTPException(404, f"no wall {wall_id!r}")
+
+    updated = {
+        "material": payload.get("material", wall.material),
+        "thickness_mm": float(payload.get("thickness_mm", wall.thickness_mm)),
+        "base_height_m": float(payload.get("base_height_m", wall.base_height_m)),
+        "top_height_m": float(payload.get("top_height_m", wall.top_height_m)),
+        "label": payload.get("label", wall.label),
+    }
+    try:
+        replacement = Wall(id=wall.id, p1=wall.p1, p2=wall.p2, **updated)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    floor.walls[floor.walls.index(wall)] = replacement
+    return _project_payload()
+
+
+@app.delete("/api/floors/{floor_id}/walls/{wall_id}")
+def delete_wall(floor_id: str, wall_id: str) -> dict[str, Any]:
+    """Remove a wall."""
+    try:
+        floor = session.project.floor(floor_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    floor.walls = [w for w in floor.walls if w.id != wall_id]
+    return _project_payload()
+
+
+@app.post("/api/project/obliquity")
+def set_obliquity(payload: dict[str, bool]) -> dict[str, Any]:
+    """Toggle the obliquity correction for paths crossing barriers at an angle."""
+    session.project.apply_obliquity = bool(payload.get("enabled", False))
+    return _project_payload()
+
+
+@app.get("/api/barriers")
+def barriers() -> dict[str, Any]:
+    """Barriers on each source-to-point path, without running the physics."""
+    return {"points": describe_barriers(session.project)}
+
+
 @app.get("/api/distances")
 def distances() -> dict[str, Any]:
     """Source-to-point distances for every link, without running the physics."""
@@ -374,6 +455,27 @@ def update_poi(poi_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         poi.distance_overrides = {
             k: v for k, v in poi.distance_overrides.items() if k in poi.linked_source_ids
         }
+    if "manual_barriers" in payload:
+        declared: dict[str, list[Barrier]] = {}
+        for source_id, items in (payload["manual_barriers"] or {}).items():
+            barriers_for_source = []
+            for item in items:
+                try:
+                    thickness = float(item["thickness_mm"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise HTTPException(400, f"barrier thickness for {source_id} is not a number") from exc
+                if thickness <= 0:
+                    raise HTTPException(400, f"barrier thickness for {source_id} must be positive")
+                barriers_for_source.append(
+                    Barrier(
+                        material=item.get("material", "concrete"),
+                        thickness_mm=thickness,
+                        label=item.get("label", ""),
+                    )
+                )
+            if barriers_for_source:
+                declared[source_id] = barriers_for_source
+        poi.manual_barriers = declared
     if "distance_overrides" in payload:
         overrides: dict[str, float] = {}
         for source_id, value in (payload["distance_overrides"] or {}).items():
