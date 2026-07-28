@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ..engine.evaluate import describe_distances, evaluate_project, results_to_rows
-from ..model.geometry import GeometryError, check_project, format_length, measurement_length
+from ..model.geometry import check_project, format_length, measurement_length
 from ..model.project import (
     LENGTH_UNITS,
     Calibration,
