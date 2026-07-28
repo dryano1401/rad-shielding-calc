@@ -1,1 +1,5 @@
-streamlit
+# GUI application dependencies. The physics package itself needs nothing.
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+pymupdf>=1.24

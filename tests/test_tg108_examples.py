@@ -12,10 +12,8 @@ import math
 
 import pytest
 
-from radshield.physics import nuclides
-from radshield.physics.archer import ArcherParams, thickness, transmission
 from radshield.physics.decay import decay_factor, dose_reduction_factor
-from radshield.physics.limits import DesignGoal, tg108_goal
+from radshield.physics.limits import tg108_goal
 from radshield.physics.tg108 import (
     PatientSource,
     equivalent_thickness,

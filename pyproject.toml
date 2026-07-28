@@ -18,7 +18,7 @@ dev = ["pytest>=8.0"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-radshield = ["physics/data/*.csv"]
+radshield = ["physics/data/*.csv", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

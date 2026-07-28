@@ -13,20 +13,43 @@ This repository currently contains the calculation core.
 
 | Phase | State |
 |---|---|
-| 1. Physics engines + tests | **complete** — 78 tests passing |
-| 2. PDF load, render, calibrate | not started |
-| 3. Point placement and metadata | not started |
-| 4. Multi-floor 3D geometry | not started |
-| 5. Results, audit trail, export | not started |
+| 1. Physics engines + tests | **complete** |
+| 2. PDF load, render, calibrate | **complete** |
+| 3. Point placement and metadata | **complete** |
+| 4. Multi-floor 3D geometry | **complete** |
+| 5. Results, audit trail, CSV export | **complete** |
+| 6. NCRP 147 CT scatter constants | needs source data |
+| 7. Barrier objects, report export | not started |
 
-## Install
+117 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+
+## Install and run
 
 ```bash
-pip install -e .
-python -m pytest
+pip install -e ".[web]"
+python -m radshield.web        # opens http://127.0.0.1:8000/
 ```
 
-No runtime dependencies. PDF and web extras are declared but unused so far.
+`radshield.physics` has no dependencies at all; FastAPI and PyMuPDF are only
+needed for the GUI.
+
+## Workflow
+
+1. **Add floors.** Upload one PDF per floor. Set elevations directly, or enter
+   floor-to-floor heights (one per gap, lowest first) and apply them to the stack.
+2. **Set the scale.** Pick the *Set scale* tool and click two points a known
+   distance apart, then type the distance with its unit ("40 ft", "12.5 m").
+   Each floor is calibrated independently, so drawings may be at different scales.
+3. **Set an alignment point.** Click the same physical feature — a column, stair
+   core, lift shaft — on every floor. Each PDF has its own arbitrary origin, so
+   without this, horizontal distances *between* floors are meaningless. The app
+   warns when it is missing.
+4. **Place points.** Add sources and points of interest, drag to adjust. A new
+   point of interest links to every existing source by default; edit the links
+   in the inspector.
+5. **Calculate.** Every source linked to a point contributes and their doses are
+   summed before the barrier is solved. Expand the detail row to see every
+   intermediate value, or export the CSV.
 
 ## Use
 

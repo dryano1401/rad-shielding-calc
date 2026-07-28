@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-from radshield.physics.archer import thickness
 from radshield.physics.limits import ncrp147_goal, tg108_goal
 from radshield.physics.ncrp147 import barriers, ct, tables
 from radshield.physics.ncrp147.barriers import XrayBarrierInputs

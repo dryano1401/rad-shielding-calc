@@ -18,7 +18,7 @@ after which every TG-108-style calculation works unchanged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .archer import ArcherParams
 from .data_loader import load_table

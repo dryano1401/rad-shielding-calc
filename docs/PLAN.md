@@ -1,7 +1,16 @@
 # Radiation Shielding Calculation Application — Planning Document
 
-Status: **Phase 1 complete** (TG-108 engine + NCRP 147 tables, 78 tests passing).
-Phases 2-5 (PDF, placement, geometry, results) not started.
+Status: **Phases 1-5 complete** — physics engines, PDF load and calibration,
+point placement, multi-floor 3D geometry, results and CSV export. 117 tests pass,
+and the GUI has been driven end to end in a real browser.
+
+Remaining: NCRP 147 CT scatter constants (blocked on source data), explicit
+barrier objects, and formatted report export.
+
+A requirement not in the original spec turned out to be necessary: **floors must
+be registered to each other**. Each PDF has its own arbitrary origin, so a
+cross-floor horizontal distance is meaningless until the same physical feature is
+marked on every floor. That is the alignment point.
 
 Decisions taken, superseding the questions below where they conflict:
 

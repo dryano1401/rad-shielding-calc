@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Radiation Shielding Calculator</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Radiation Shielding Calculator</h1>
+  <input id="project-name" type="text" placeholder="Project name">
+  <span class="spacer"></span>
+  <input id="load-file" type="file" accept=".rsproj" hidden>
+  <button id="btn-open">Open</button>
+  <button id="btn-save">Save</button>
+  <button id="btn-new">New</button>
+</header>
+
+<main>
+  <aside id="left">
+    <section>
+      <h2>Floors</h2>
+      <p class="hint">Lowest elevation first. Each floor keeps its own scale.</p>
+      <div id="floor-list"></div>
+      <input id="pdf-file" type="file" accept="application/pdf" hidden>
+      <button id="btn-add-floor" class="wide">Add floor from PDF…</button>
+      <div class="row">
+        <label>Floor-to-floor (m)
+          <input id="spacing" type="text" placeholder="e.g. 4.3, 4.3">
+        </label>
+        <button id="btn-spacing">Apply</button>
+      </div>
+      <p class="hint">One value per gap, lowest first. Sets elevations for the whole stack.</p>
+    </section>
+
+    <section>
+      <h2>Report materials</h2>
+      <div id="material-list" class="checks"></div>
+    </section>
+
+    <section id="problems-box" hidden>
+      <h2>Needs attention</h2>
+      <ul id="problems"></ul>
+    </section>
+  </aside>
+
+  <section id="centre">
+    <div id="toolbar">
+      <select id="floor-select" title="Floor being viewed"></select>
+      <span class="divider"></span>
+      <button class="tool active" data-tool="select">Select / move</button>
+      <button class="tool" data-tool="calibrate">Set scale</button>
+      <button class="tool" data-tool="align">Alignment point</button>
+      <button class="tool" data-tool="source">Add source</button>
+      <button class="tool" data-tool="poi">Add point of interest</button>
+      <span class="divider"></span>
+      <button id="btn-zoom-out">−</button>
+      <button id="btn-zoom-fit">Fit</button>
+      <button id="btn-zoom-in">+</button>
+      <label class="ghost-toggle"><input id="ghost" type="checkbox"> Show other floors</label>
+    </div>
+    <div id="canvas-wrap">
+      <canvas id="plan"></canvas>
+      <div id="status"></div>
+    </div>
+  </section>
+
+  <aside id="right">
+    <section>
+      <h2 id="inspector-title">Nothing selected</h2>
+      <div id="inspector"><p class="hint">Place a source or a point of interest, then select it to edit its parameters.</p></div>
+    </section>
+    <section>
+      <h2>Placed points</h2>
+      <div id="point-list"></div>
+    </section>
+  </aside>
+</main>
+
+<section id="results-panel">
+  <div class="results-header">
+    <h2>Results</h2>
+    <button id="btn-calculate">Calculate</button>
+    <a id="btn-csv" href="/api/results.csv">Export CSV</a>
+    <span id="results-note" class="hint"></span>
+  </div>
+  <div id="results"></div>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

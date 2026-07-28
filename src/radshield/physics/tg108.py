@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from . import nuclides
-from .archer import ArcherParams, thickness as archer_thickness
+from .archer import thickness as archer_thickness
 from .decay import decay_factor, dose_reduction_factor
 from .limits import DesignGoal
 
