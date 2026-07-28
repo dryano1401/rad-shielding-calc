@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from .project import Floor, PointOfInterest, Project, SourcePoint
+from .project import Floor, LENGTH_UNITS, Measurement, PointOfInterest, Project, SourcePoint
 
 # TG-108 Fig. 5 conventions.
 SOURCE_HEIGHT_M = 1.0
@@ -36,7 +36,12 @@ class GeometryError(ValueError):
 
 @dataclass
 class Distance:
-    """A source-to-point distance with its full derivation."""
+    """A source-to-point distance with its full derivation.
+
+    ``metres`` is the value the calculation uses.  When an override is in
+    force that is the entered figure, and ``geometric_m`` retains what the
+    placed geometry would have given, so a report can show both.
+    """
 
     metres: float
     horizontal_m: float
@@ -44,6 +49,47 @@ class Distance:
     same_floor: bool
     notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    geometric_m: float | None = None
+
+    @property
+    def is_overridden(self) -> bool:
+        """True when an entered distance replaced the geometric one."""
+        return self.geometric_m is not None
+
+
+def format_length(metres: float, unit: str = "ft") -> str:
+    """Render a length in the requested display unit, with metres alongside.
+
+    Architectural drawings are usually dimensioned in feet while the physics
+    works in metres, so both are shown rather than forcing a mental conversion.
+    """
+    if unit == "m":
+        return f"{metres:.2f} m"
+    converted = metres / LENGTH_UNITS[unit]
+    if unit == "ft":
+        total_inches = round(converted * 12.0, 1)
+        feet, inches = divmod(total_inches, 12.0)
+        return f"{int(feet)}' {inches:.1f}\" ({metres:.2f} m)"
+    return f"{converted:.2f} {unit} ({metres:.2f} m)"
+
+
+def measure(floor: Floor, p1: tuple[float, float], p2: tuple[float, float]) -> float:
+    """Real-world distance in metres between two points on one drawing.
+
+    This is a straight scale conversion within a single floor, so no alignment
+    point is needed -- only the calibration.
+    """
+    if floor.calibration is None:
+        raise GeometryError(
+            f"floor {floor.name!r} has no scale calibration; set the scale before measuring"
+        )
+    scale = floor.calibration.metres_per_unit
+    return math.hypot(p2[0] - p1[0], p2[1] - p1[1]) * scale
+
+
+def measurement_length(floor: Floor, item: Measurement) -> float:
+    """Real-world length of a stored measurement, in metres."""
+    return measure(floor, item.p1, item.p2)
 
 
 def floor_offset_m(floor: Floor, x: float, y: float) -> tuple[float, float, list[str]]:
@@ -95,6 +141,7 @@ def distance(
     *,
     apply_ncrp_standoff: bool = False,
     vertical_only: bool = False,
+    override_m: float | None = None,
 ) -> Distance:
     """Compute the source-to-point distance in metres.
 
@@ -108,6 +155,9 @@ def distance(
         vertical_only: Ignore horizontal separation.  Appropriate for a point
             directly above or below the source, which is what TG-108's floor
             and ceiling examples assume.
+        override_m: Distance entered by the user, replacing the geometric
+            result.  The standoff is not added on top of an override, since an
+            entered distance is taken to be the final source-to-point figure.
 
     Returns:
         A :class:`Distance` carrying the components, notes and any warnings.
@@ -145,14 +195,30 @@ def distance(
 
     result = math.hypot(horizontal, vertical)
 
-    if apply_ncrp_standoff:
+    if apply_ncrp_standoff and override_m is None:
         result += NCRP_STANDOFF_M
         notes.append(
             f"NCRP 147 standoff of {NCRP_STANDOFF_M} m added: the placed point marks the "
             "barrier, not the point of protection"
         )
 
-    if result <= 0:
+    geometric = None
+    if override_m is not None:
+        if override_m <= 0:
+            raise GeometryError(f"entered distance must be positive, got {override_m}")
+        geometric = result
+        notes.append(
+            f"distance entered manually as {override_m:.3f} m, replacing the {geometric:.3f} m "
+            "derived from the placed geometry"
+        )
+        if geometric > 0 and abs(override_m - geometric) / geometric > 0.25:
+            warnings.append(
+                f"entered distance {override_m:.2f} m differs from the drawing geometry "
+                f"({geometric:.2f} m) by more than 25%; check it is intended"
+            )
+        result = override_m
+
+    if result <= 0 and override_m is None:
         raise GeometryError(
             f"source {source.label or source.id!r} and point {poi.label or poi.id!r} are "
             "coincident; move one of them"
@@ -171,6 +237,7 @@ def distance(
         same_floor=same_floor,
         notes=notes,
         warnings=warnings,
+        geometric_m=geometric,
     )
 
 

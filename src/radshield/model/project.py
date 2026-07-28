@@ -76,6 +76,21 @@ class Calibration:
 
 
 @dataclass
+class Measurement:
+    """A recorded distance between two points on one drawing.
+
+    Measurements are kept with the project rather than being transient, so a
+    dimension taken off the drawing (a wall standoff, a room width) survives
+    into the saved file and can be cited in a report.
+    """
+
+    id: str
+    p1: tuple[float, float]
+    p2: tuple[float, float]
+    label: str = ""
+
+
+@dataclass
 class Floor:
     """One architectural drawing and its place in the vertical stack.
 
@@ -103,6 +118,7 @@ class Floor:
     alignment: tuple[float, float] | None = None
     page_width: float = 0.0
     page_height: float = 0.0
+    measurements: list[Measurement] = field(default_factory=list)
 
     @property
     def is_calibrated(self) -> bool:
@@ -148,6 +164,12 @@ class PointOfInterest:
             (cm for TG-108 materials, mm for NCRP 147).
         linked_source_ids: Sources incident on this point.  All of them
             contribute; their doses are summed before solving.
+        distance_overrides: Source id to distance in metres, replacing the
+            distance derived from the placed geometry.  Use when the drawing
+            geometry is not the distance the calculation should use -- an
+            angled path, a dimension taken from a different drawing, or a
+            figure agreed with the reviewer.  Overrides are always stated in
+            the audit trail alongside the geometric distance they replaced.
     """
 
     id: str
@@ -163,6 +185,7 @@ class PointOfInterest:
     existing_material: str = ""
     existing_thickness: float = 0.0
     linked_source_ids: list[str] = field(default_factory=list)
+    distance_overrides: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -174,6 +197,7 @@ class Project:
     sources: list[SourcePoint] = field(default_factory=list)
     pois: list[PointOfInterest] = field(default_factory=list)
     materials: list[str] = field(default_factory=lambda: ["lead", "concrete"])
+    display_unit: str = "ft"
     schema_version: int = 1
 
     def floor(self, floor_id: str) -> Floor:
@@ -205,12 +229,15 @@ class Project:
         self.pois = [p for p in self.pois if p.floor_id != floor_id]
         for poi in self.pois:
             poi.linked_source_ids = [i for i in poi.linked_source_ids if i not in removed]
+            for source_id in removed:
+                poi.distance_overrides.pop(source_id, None)
 
     def remove_source(self, source_id: str) -> None:
         """Delete a source and unlink it everywhere."""
         self.sources = [s for s in self.sources if s.id != source_id]
         for poi in self.pois:
             poi.linked_source_ids = [i for i in poi.linked_source_ids if i != source_id]
+            poi.distance_overrides.pop(source_id, None)
 
     def set_floor_to_floor(self, heights_m: list[float]) -> None:
         """Set elevations from consecutive floor-to-floor heights.
@@ -255,6 +282,15 @@ class Project:
                 else None
             )
             alignment = raw.get("alignment")
+            measurements = [
+                Measurement(
+                    id=m["id"],
+                    p1=tuple(m["p1"]),
+                    p2=tuple(m["p2"]),
+                    label=m.get("label", ""),
+                )
+                for m in raw.get("measurements", [])
+            ]
             floors.append(
                 Floor(
                     id=raw["id"],
@@ -266,6 +302,7 @@ class Project:
                     alignment=tuple(alignment) if alignment else None,
                     page_width=raw.get("page_width", 0.0),
                     page_height=raw.get("page_height", 0.0),
+                    measurements=measurements,
                 )
             )
 
@@ -275,5 +312,6 @@ class Project:
             sources=[SourcePoint(**raw) for raw in data.get("sources", [])],
             pois=[PointOfInterest(**raw) for raw in data.get("pois", [])],
             materials=data.get("materials", ["lead", "concrete"]),
+            display_unit=data.get("display_unit", "ft"),
             schema_version=1,
         )

@@ -14,6 +14,9 @@ const state = {
   view: { scale: 1, x: 0, y: 0 },
   images: new Map(),        // floorId -> HTMLImageElement
   calibrationPick: [],      // points collected by the calibrate tool
+  measurePick: [],          // points collected by the measure tool
+  hover: null,              // cursor position in PDF space, for rubber banding
+  distances: null,          // /api/distances payload, refreshed after edits
   drag: null,
   results: null,
   ghost: false,
@@ -49,6 +52,28 @@ function setProject(data) {
   renderAll();
 }
 
+/* ----------------------------------------------------------------- units */
+
+const METRES_PER = { ft: 0.3048, in: 0.0254, m: 1, cm: 0.01, mm: 0.001 };
+
+const displayUnit = () => state.project?.display_unit || 'ft';
+const toMetres = (value, unit) => value * METRES_PER[unit || displayUnit()];
+const fromMetres = (metres, unit) => metres / METRES_PER[unit || displayUnit()];
+
+// Feet are shown as feet and inches, which is how drawings are dimensioned.
+function formatLength(metres) {
+  if (metres === null || metres === undefined) return '';
+  const unit = displayUnit();
+  if (unit === 'm') return `${metres.toFixed(2)} m`;
+  const converted = fromMetres(metres, unit);
+  if (unit !== 'ft') return `${converted.toFixed(2)} ${unit} (${metres.toFixed(2)} m)`;
+  // Round before splitting so 11.98" rolls over instead of printing as 12.0".
+  const totalInches = Math.round(converted * 120) / 10;
+  const feet = Math.floor(totalInches / 12);
+  const inches = totalInches - feet * 12;
+  return `${feet}' ${inches.toFixed(1)}" (${metres.toFixed(2)} m)`;
+}
+
 /* -------------------------------------------------------------- geometry */
 
 const currentFloor = () => state.project?.floors.find(f => f.id === state.floorId) || null;
@@ -71,6 +96,12 @@ function toPdf(sx, sy) {
 function eventPdf(event) {
   const rect = canvas.getBoundingClientRect();
   return toPdf(event.clientX - rect.left, event.clientY - rect.top);
+}
+
+// Length in metres of a segment on the current floor, or null when uncalibrated.
+function pdfSegmentMetres(floor, p1, p2) {
+  if (!floor?.metres_per_unit) return null;
+  return Math.hypot(p2.x - p1.x, p2.y - p1.y) * floor.metres_per_unit;
 }
 
 function fitToView() {
@@ -151,8 +182,74 @@ function draw() {
     }
   }
   drawLinks(floor);
+  drawMeasurements(floor);
   drawPoints(floor, 1);
   drawCalibration(floor);
+}
+
+function drawMeasurements(floor) {
+  ctx.save();
+  ctx.font = '11px system-ui';
+  for (const item of floor.measurements || []) {
+    dimensionLine(
+      toScreen(item.p1[0], item.p1[1]),
+      toScreen(item.p2[0], item.p2[1]),
+      item.label ? `${item.label}: ${item.display}` : item.display,
+      '#ffc857',
+    );
+  }
+
+  // Rubber band for the measurement in progress.
+  if (state.tool === 'measure' && state.measurePick.length === 1 && state.hover) {
+    const start = state.measurePick[0];
+    const metres = pdfSegmentMetres(floor, start, state.hover);
+    dimensionLine(
+      toScreen(start.x, start.y),
+      toScreen(state.hover.x, state.hover.y),
+      metres === null ? 'floor not calibrated' : formatLength(metres),
+      '#ffc857',
+      true,
+    );
+  }
+  ctx.restore();
+}
+
+// A measured segment with end ticks and a length label at its midpoint.
+function dimensionLine(a, b, text, colour, dashed) {
+  ctx.save();
+  ctx.strokeStyle = colour;
+  ctx.fillStyle = colour;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash(dashed ? [5, 4] : []);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  // End ticks drawn perpendicular to the run.
+  const angle = Math.atan2(b.y - a.y, b.x - a.x) + Math.PI / 2;
+  const tx = Math.cos(angle) * 6;
+  const ty = Math.sin(angle) * 6;
+  ctx.setLineDash([]);
+  for (const end of [a, b]) {
+    ctx.beginPath();
+    ctx.moveTo(end.x - tx, end.y - ty);
+    ctx.lineTo(end.x + tx, end.y + ty);
+    ctx.stroke();
+  }
+
+  if (text) {
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const width = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(10,12,16,.85)';
+    ctx.fillRect(mx - width / 2 - 4, my - 17, width + 8, 15);
+    ctx.fillStyle = colour;
+    ctx.textAlign = 'center';
+    ctx.fillText(text, mx, my - 6);
+    ctx.textAlign = 'left';
+  }
+  ctx.restore();
 }
 
 function drawCalibration(floor) {
@@ -310,10 +407,16 @@ canvas.addEventListener('mousedown', event => {
 
 canvas.addEventListener('mousemove', event => {
   const floor = currentFloor();
-  if (floor?.calibration) {
-    const pdf = eventPdf(event);
-    setStatus(`${floor.name} — ${floor.scale_description}`);
+  state.hover = floor ? eventPdf(event) : null;
+
+  if (state.tool === 'measure' && state.measurePick.length === 1 && state.hover) {
+    const metres = pdfSegmentMetres(floor, state.measurePick[0], state.hover);
+    setStatus(metres === null
+      ? 'This floor has no scale yet — set the scale before measuring.'
+      : `Length: ${formatLength(metres)} — click to record, Esc to cancel.`);
+    draw();
   }
+
   if (!state.drag) return;
 
   if (state.drag.pan) {
@@ -377,6 +480,30 @@ canvas.addEventListener('click', async event => {
     return;
   }
 
+  if (state.tool === 'measure') {
+    if (!floor.metres_per_unit) {
+      alert('Set the scale on this floor before measuring.');
+      return;
+    }
+    state.measurePick.push(pdf);
+    if (state.measurePick.length < 2) {
+      setStatus('Click the second point of the distance to measure.');
+      draw();
+      return;
+    }
+    const [p1, p2] = state.measurePick;
+    state.measurePick = [];
+    const metres = pdfSegmentMetres(floor, p1, p2);
+    const label = prompt(
+      `Measured ${formatLength(metres)}.\nName this measurement (optional), or Cancel to discard.`,
+      '');
+    if (label === null) { draw(); return; }
+    setProject(await send(`/api/floors/${floor.id}/measurements`, 'POST', {
+      p1: [p1.x, p1.y], p2: [p2.x, p2.y], label,
+    }));
+    return;
+  }
+
   if (state.tool === 'align') {
     setProject(await send(`/api/floors/${floor.id}`, 'PATCH', { alignment: [pdf.x, pdf.y] }));
     setTool('select');
@@ -419,9 +546,18 @@ canvas.addEventListener('wheel', event => {
   zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12, event.clientX - rect.left, event.clientY - rect.top);
 }, { passive: false });
 
+window.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  state.calibrationPick = [];
+  state.measurePick = [];
+  setStatus('Cancelled.');
+  draw();
+});
+
 function setTool(tool) {
   state.tool = tool;
   state.calibrationPick = [];
+  state.measurePick = [];
   document.querySelectorAll('.tool').forEach(button => {
     button.classList.toggle('active', button.dataset.tool === tool);
   });
@@ -429,6 +565,7 @@ function setTool(tool) {
     select: 'Drag a point to move it. Drag the drawing to pan, scroll to zoom.',
     calibrate: 'Click two points a known distance apart on this drawing.',
     align: 'Click a feature that appears on every floor (a column, stair core, lift shaft).',
+    measure: 'Click two points to measure the distance between them, e.g. a wall standoff.',
     source: 'Click to place a radiation source.',
     poi: 'Click to place a point to be protected.',
   };
@@ -450,11 +587,43 @@ function select(selection) {
 function renderAll() {
   renderFloors();
   renderFloorSelect();
+  renderMeasurements();
   renderMaterials();
   renderPointList();
   renderInspector();
   renderProblems();
   draw();
+  refreshDistances();
+}
+
+function renderMeasurements() {
+  const box = document.getElementById('measure-box');
+  const list = document.getElementById('measure-list');
+  const floor = currentFloor();
+  const items = floor?.measurements || [];
+  box.hidden = items.length === 0;
+  list.innerHTML = '';
+  for (const item of items) {
+    const div = document.createElement('div');
+    div.className = 'measure';
+    div.innerHTML = `<span class="len">${escapeHtml(
+      item.label ? `${item.label}: ${item.display}` : item.display)}</span>
+      <button title="Delete measurement">×</button>`;
+    div.querySelector('button').onclick = async () =>
+      setProject(await api(`/api/floors/${floor.id}/measurements/${item.id}`, { method: 'DELETE' }));
+    list.appendChild(div);
+  }
+}
+
+// Distances are fetched separately so they can be shown before calculating.
+async function refreshDistances() {
+  try {
+    state.distances = await api('/api/distances');
+  } catch (_) {
+    state.distances = null;
+    return;
+  }
+  if (state.selection?.kind === 'poi') renderInspector();
 }
 
 function renderFloors() {
@@ -673,11 +842,47 @@ function renderPoiInspector(title, box) {
     // otherwise the list shows the same factor twice.
     + (matchesPreset ? '' : `<option value="${poi.occupancy}" selected>${poi.occupancy} (custom)</option>`);
 
+  // Distances come from /api/distances, keyed by source, for the linked sources.
+  const distanceInfo = new Map(
+    (state.distances?.points.find(p => p.poi_id === poi.id)?.links || [])
+      .map(link => [link.source_id, link]));
+
   const links = state.project.sources.map(source => {
     const floor = state.project.floors.find(f => f.id === source.floor_id);
     const checked = poi.linked_source_ids.includes(source.id);
-    return `<label><input type="checkbox" data-link="${source.id}" ${checked ? 'checked' : ''}>
-      ${escapeHtml(source.label || source.id)} <span class="where">(${escapeHtml(floor?.name || '?')})</span></label>`;
+    const info = distanceInfo.get(source.id);
+    const override = poi.distance_overrides?.[source.id];
+
+    let detail = '';
+    if (checked && info) {
+      if (info.error) {
+        detail = `<div class="bad">${escapeHtml(info.error)}</div>`;
+      } else {
+        const parts = [];
+        if (!info.same_floor || Math.abs(info.vertical_m) > 1e-6) {
+          parts.push(`horizontal ${formatLength(info.horizontal_m)}`);
+          parts.push(`vertical ${formatLength(Math.abs(info.vertical_m))}`);
+        }
+        const breakdown = parts.length ? ` (${parts.join(', ')})` : '';
+        detail = override
+          ? `<div class="dist overridden">Using entered ${formatLength(info.distance_m)} —
+               drawing gives ${formatLength(info.geometric_m)}${breakdown}</div>`
+          : `<div class="dist">From drawing: ${formatLength(info.distance_m)}${breakdown}</div>`;
+        detail += `<div class="override">
+            <input type="number" step="0.01" min="0" data-distance="${source.id}"
+                   placeholder="${fromMetres(info.geometric_m).toFixed(2)}"
+                   value="${override ? fromMetres(override).toFixed(2) : ''}">
+            <span>${displayUnit()} — leave blank to use the drawing</span>
+          </div>`;
+      }
+    }
+
+    return `<div class="link-row">
+      <div class="top">
+        <label><input type="checkbox" data-link="${source.id}" ${checked ? 'checked' : ''}>
+          ${escapeHtml(source.label || source.id)}
+          <span class="where">(${escapeHtml(floor?.name || '?')})</span></label>
+      </div>${detail}</div>`;
   }).join('') || '<p class="hint">No sources placed yet.</p>';
 
   box.innerHTML = `
@@ -712,8 +917,8 @@ function renderPoiInspector(title, box) {
     </div>
     ${poi.existing_material ? `<div class="field">Existing thickness (${poi.existing_material === 'lead' || poi.existing_material === 'concrete' || poi.existing_material === 'iron' ? 'cm for TG-108 materials, mm for NCRP 147' : 'mm'})
       <input type="number" step="0.1" value="${poi.existing_thickness}" data-p="existing_thickness"></div>` : ''}
-    <h2 style="margin-top:14px">Contributing sources</h2>
-    <div class="checks">${links}</div>
+    <h2 style="margin-top:14px">Contributing sources and distances</h2>
+    <div>${links}</div>
     <button data-act="delete" class="wide">Delete point</button>`;
 
   wireInspector(box, `/api/pois/${poi.id}`, poi);
@@ -723,6 +928,25 @@ function renderPoiInspector(title, box) {
       const chosen = [...box.querySelectorAll('[data-link]')]
         .filter(i => i.checked).map(i => i.dataset.link);
       setProject(await send(`/api/pois/${poi.id}`, 'PATCH', { linked_source_ids: chosen }));
+    };
+  });
+
+  box.querySelectorAll('[data-distance]').forEach(input => {
+    input.onchange = async () => {
+      // Overrides are stored in metres; the field is in the display unit.
+      const overrides = { ...(poi.distance_overrides || {}) };
+      const entered = parseFloat(input.value);
+      if (input.value === '' || Number.isNaN(entered)) {
+        delete overrides[input.dataset.distance];
+      } else if (entered <= 0) {
+        alert('Distance must be greater than zero.');
+        return;
+      } else {
+        overrides[input.dataset.distance] = toMetres(entered);
+      }
+      try {
+        setProject(await send(`/api/pois/${poi.id}`, 'PATCH', { distance_overrides: overrides }));
+      } catch (error) { alert(error.message); }
     };
   });
 }
@@ -789,7 +1013,9 @@ async function calculate() {
       html += `<tr class="contribution">
         <td>${escapeHtml(result.label)}</td><td>${escapeHtml(result.floor_name)}</td>
         <td>${escapeHtml(contribution.label)}</td><td>${contribution.method}</td>
-        <td class="num">${contribution.distance_m.toFixed(2)}</td>
+        <td class="num">${contribution.distance_m.toFixed(2)}${
+          contribution.geometric_distance_m
+            ? ` <span class="tag need">entered</span>` : ''}</td>
         <td class="num">${fmt(contribution.value)} ${contribution.quantity.includes('uSv') ? 'µSv' : 'mGy'}</td>
         <td class="num"></td>${materials.map(() => '<td></td>').join('')}<td></td></tr>`;
     }
@@ -860,6 +1086,9 @@ document.getElementById('btn-spacing').onclick = async () => {
   } catch (error) { alert(error.message); }
 };
 
+document.getElementById('display-unit').onchange = async event =>
+  setProject(await send('/api/project/display-unit', 'POST', { unit: event.target.value }));
+
 document.getElementById('project-name').onchange = async event =>
   setProject(await send('/api/project/name', 'POST', { name: event.target.value }));
 
@@ -898,5 +1127,6 @@ window.addEventListener('resize', () => draw());
   state.options = await api('/api/options');
   setProject(await api('/api/project'));
   document.getElementById('project-name').value = state.project.name;
+  document.getElementById('display-unit').value = displayUnit();
   setTool('select');
 })();

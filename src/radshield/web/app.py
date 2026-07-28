@@ -18,11 +18,13 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from ..engine.evaluate import evaluate_project, results_to_rows
-from ..model.geometry import check_project
+from ..engine.evaluate import describe_distances, evaluate_project, results_to_rows
+from ..model.geometry import GeometryError, check_project, format_length, measurement_length
 from ..model.project import (
+    LENGTH_UNITS,
     Calibration,
     Floor,
+    Measurement,
     PointOfInterest,
     Project,
     SourcePoint,
@@ -61,6 +63,14 @@ def _project_payload() -> dict[str, Any]:
         floor["metres_per_unit"] = (
             stored.calibration.metres_per_unit if stored.calibration else None
         )
+        for raw, item in zip(floor["measurements"], stored.measurements):
+            if stored.calibration:
+                metres = measurement_length(stored, item)
+                raw["metres"] = metres
+                raw["display"] = format_length(metres, session.project.display_unit)
+            else:
+                raw["metres"] = None
+                raw["display"] = "floor not calibrated"
     data["problems"] = check_project(session.project)
     data["path"] = str(session.path) if session.path else None
     return data
@@ -230,6 +240,53 @@ def floor_image(floor_id: str, zoom: float = 2.0) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/floors/{floor_id}/measurements")
+def add_measurement(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Record a measured distance between two points on a drawing."""
+    try:
+        floor = session.project.floor(floor_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if floor.calibration is None:
+        raise HTTPException(400, f"floor {floor.name!r} has no scale calibration")
+    floor.measurements.append(
+        Measurement(
+            id=new_id("msr"),
+            p1=tuple(payload["p1"]),
+            p2=tuple(payload["p2"]),
+            label=payload.get("label", ""),
+        )
+    )
+    return _project_payload()
+
+
+@app.delete("/api/floors/{floor_id}/measurements/{measurement_id}")
+def delete_measurement(floor_id: str, measurement_id: str) -> dict[str, Any]:
+    """Remove a recorded measurement."""
+    try:
+        floor = session.project.floor(floor_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    floor.measurements = [m for m in floor.measurements if m.id != measurement_id]
+    return _project_payload()
+
+
+@app.get("/api/distances")
+def distances() -> dict[str, Any]:
+    """Source-to-point distances for every link, without running the physics."""
+    return {"display_unit": session.project.display_unit, "points": describe_distances(session.project)}
+
+
+@app.post("/api/project/display-unit")
+def set_display_unit(payload: dict[str, str]) -> dict[str, Any]:
+    """Choose the unit distances are displayed in."""
+    unit = payload.get("unit", "ft")
+    if unit not in LENGTH_UNITS:
+        raise HTTPException(400, f"unknown unit {unit!r}; known: {sorted(LENGTH_UNITS)}")
+    session.project.display_unit = unit
+    return _project_payload()
+
+
 @app.post("/api/sources")
 def add_source(payload: dict[str, Any]) -> dict[str, Any]:
     """Place a source point."""
@@ -289,6 +346,7 @@ def add_poi(payload: dict[str, Any]) -> dict[str, Any]:
         existing_material=payload.get("existing_material", ""),
         existing_thickness=float(payload.get("existing_thickness", 0.0)),
         linked_source_ids=payload.get("linked_source_ids", []),
+        distance_overrides=payload.get("distance_overrides", {}),
     )
     session.project.pois.append(poi)
     return _project_payload()
@@ -312,6 +370,23 @@ def update_poi(poi_id: str, payload: dict[str, Any]) -> dict[str, Any]:
             setattr(poi, attribute, bool(payload[attribute]))
     if "linked_source_ids" in payload:
         poi.linked_source_ids = list(payload["linked_source_ids"])
+        # Drop overrides for sources no longer contributing to this point.
+        poi.distance_overrides = {
+            k: v for k, v in poi.distance_overrides.items() if k in poi.linked_source_ids
+        }
+    if "distance_overrides" in payload:
+        overrides: dict[str, float] = {}
+        for source_id, value in (payload["distance_overrides"] or {}).items():
+            if value in (None, ""):
+                continue
+            try:
+                metres = float(value)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, f"distance for {source_id} is not a number") from exc
+            if metres <= 0:
+                raise HTTPException(400, f"distance for {source_id} must be positive")
+            overrides[source_id] = metres
+        poi.distance_overrides = overrides
     return _project_payload()
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..model.geometry import Distance, distance
+from ..model.geometry import Distance, distance, format_length
 from ..model.project import PointOfInterest, Project, SourcePoint
 from ..physics import tg108
 from ..physics.limits import ncrp147_goal, tg108_goal
@@ -40,6 +40,7 @@ class SourceContribution:
     value: float
     terms: dict[str, float] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    geometric_distance_m: float | None = None
 
 
 @dataclass
@@ -184,6 +185,7 @@ def _solve_tg108(
             value=dose.weekly_dose_uSv,
             terms=dose.terms,
             notes=list(dose.notes) + d.notes,
+            geometric_distance_m=d.geometric_m,
         )
         for (src, d), dose in zip(pairs, result.per_source)
     ]
@@ -234,6 +236,7 @@ def _solve_ncrp147(
                 value=res.unshielded_weekly_kerma_mGy,
                 terms=res.terms,
                 notes=list(res.notes) + d.notes,
+                geometric_distance_m=d.geometric_m,
             )
         )
 
@@ -319,6 +322,7 @@ def evaluate_point(project: Project, poi: PointOfInterest) -> PointResult:
                 apply_ncrp_standoff=(
                     source.method != "tg108" and not poi.offset_applied
                 ),
+                override_m=poi.distance_overrides.get(source_id),
             )
         except Exception as exc:  # geometry problems are reported, not raised
             result.errors.append(f"{source.label or source.id}: {exc}")
@@ -357,6 +361,59 @@ def evaluate_project(project: Project) -> list[PointResult]:
     return [evaluate_point(project, poi) for poi in project.pois]
 
 
+def describe_distances(project: Project) -> list[dict[str, Any]]:
+    """Per point, the distance to each linked source, without running the physics.
+
+    Lets the interface display and edit distances before a calculation is run,
+    and reports geometry failures per link rather than aborting the lot.
+    """
+    unit = project.display_unit
+    report: list[dict[str, Any]] = []
+    for poi in project.pois:
+        links: list[dict[str, Any]] = []
+        for source_id in poi.linked_source_ids:
+            entry: dict[str, Any] = {"source_id": source_id, "override_m": poi.distance_overrides.get(source_id)}
+            try:
+                source = project.source(source_id)
+            except KeyError:
+                entry["error"] = "source no longer exists"
+                links.append(entry)
+                continue
+            entry["label"] = source.label or source.id
+            try:
+                geometric = distance(
+                    project,
+                    source,
+                    poi,
+                    apply_ncrp_standoff=(source.method != "tg108" and not poi.offset_applied),
+                )
+                used = distance(
+                    project,
+                    source,
+                    poi,
+                    apply_ncrp_standoff=(source.method != "tg108" and not poi.offset_applied),
+                    override_m=poi.distance_overrides.get(source_id),
+                )
+            except Exception as exc:
+                entry["error"] = str(exc)
+                links.append(entry)
+                continue
+            entry.update(
+                geometric_m=geometric.metres,
+                distance_m=used.metres,
+                horizontal_m=used.horizontal_m,
+                vertical_m=used.vertical_m,
+                same_floor=used.same_floor,
+                display=format_length(used.metres, unit),
+                geometric_display=format_length(geometric.metres, unit),
+                warnings=used.warnings,
+                notes=used.notes,
+            )
+            links.append(entry)
+        report.append({"poi_id": poi.id, "label": poi.label or poi.id, "links": links})
+    return report
+
+
 def results_to_rows(results: list[PointResult], materials: list[str]) -> list[dict[str, Any]]:
     """Flatten results into CSV-ready rows, one per source contribution.
 
@@ -375,6 +432,10 @@ def results_to_rows(results: list[PointResult], materials: list[str]) -> list[di
                     "source": contribution.label,
                     "method": contribution.method,
                     "distance_m": round(contribution.distance_m, 3),
+                    "geometric_distance_m": (
+                        "" if contribution.geometric_distance_m is None
+                        else round(contribution.geometric_distance_m, 3)
+                    ),
                     "quantity": contribution.quantity,
                     "value": round(contribution.value, 4),
                     "occupancy": res.occupancy,

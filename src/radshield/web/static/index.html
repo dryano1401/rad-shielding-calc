@@ -11,6 +11,12 @@
 <header>
   <h1>Radiation Shielding Calculator</h1>
   <input id="project-name" type="text" placeholder="Project name">
+  <label class="unit-toggle">Units
+    <select id="display-unit">
+      <option value="ft">feet</option>
+      <option value="m">metres</option>
+    </select>
+  </label>
   <span class="spacer"></span>
   <input id="load-file" type="file" accept=".rsproj" hidden>
   <button id="btn-open">Open</button>
@@ -35,6 +41,12 @@
       <p class="hint">One value per gap, lowest first. Sets elevations for the whole stack.</p>
     </section>
 
+    <section id="measure-box" hidden>
+      <h2>Measurements</h2>
+      <p class="hint">Distances taken off the current drawing. Saved with the project.</p>
+      <div id="measure-list"></div>
+    </section>
+
     <section>
       <h2>Report materials</h2>
       <div id="material-list" class="checks"></div>
@@ -53,6 +65,7 @@
       <button class="tool active" data-tool="select">Select / move</button>
       <button class="tool" data-tool="calibrate">Set scale</button>
       <button class="tool" data-tool="align">Alignment point</button>
+      <button class="tool" data-tool="measure">Measure</button>
       <button class="tool" data-tool="source">Add source</button>
       <button class="tool" data-tool="poi">Add point of interest</button>
       <span class="divider"></span>

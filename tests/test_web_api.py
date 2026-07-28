@@ -277,3 +277,152 @@ def test_material_selection_drives_reported_columns(client):
     client.post("/api/materials", json={"materials": ["lead", "iron"]})
     payload = client.get("/api/results").json()
     assert set(payload["results"][0]["methods"][0]["thickness_mm"]) == {"lead", "iron"}
+
+
+def test_measurement_lifecycle(client):
+    """Record a measured wall distance, see its length, then delete it."""
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    calibrate(client, floor_id, metres_per_unit=0.1)
+
+    project = client.post(
+        f"/api/floors/{floor_id}/measurements",
+        json={"p1": [0, 0], "p2": [100, 0], "label": "Wall to scanner"},
+    ).json()
+    measurement = project["floors"][0]["measurements"][0]
+    assert measurement["label"] == "Wall to scanner"
+    assert measurement["metres"] == pytest.approx(10.0)
+    # Default display unit is feet; 10 m is 32 ft 9.7 in.
+    assert measurement["display"].startswith("32'")
+
+    project = client.delete(
+        f"/api/floors/{floor_id}/measurements/{measurement['id']}"
+    ).json()
+    assert project["floors"][0]["measurements"] == []
+
+
+def test_measurement_requires_a_calibrated_floor(client):
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    response = client.post(
+        f"/api/floors/{floor_id}/measurements", json={"p1": [0, 0], "p2": [50, 0]}
+    )
+    assert response.status_code == 400
+    assert "calibration" in response.json()["detail"]
+
+
+def test_display_unit_switches_measurement_formatting(client):
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    calibrate(client, floor_id, metres_per_unit=0.1)
+    client.post(f"/api/floors/{floor_id}/measurements", json={"p1": [0, 0], "p2": [100, 0]})
+
+    project = client.post("/api/project/display-unit", json={"unit": "m"}).json()
+    assert project["floors"][0]["measurements"][0]["display"] == "10.00 m"
+    assert client.post("/api/project/display-unit", json={"unit": "furlong"}).status_code == 400
+
+
+def two_floor_setup(client):
+    """A source on the lower floor and a point directly above it, 4.3 m up."""
+    project = add_floor(client, "Source floor", 0.0)
+    project = add_floor(client, "Floor above", 4.3)
+    lower, upper = project["floors"][0]["id"], project["floors"][1]["id"]
+    for floor_id in (lower, upper):
+        calibrate(client, floor_id)
+        client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    project = client.post("/api/sources", json={
+        "floor_id": lower, "x": 0, "y": 0, "label": "Uptake room",
+        "method": "tg108", "height_above_floor_m": 1.0,
+        "params": {"kind": "uptake", "nuclide": "F-18",
+                   "administered_activity_MBq": 555, "patients_per_week": 40,
+                   "uptake_time_h": 1.0},
+    }).json()
+    source_id = project["sources"][0]["id"]
+    project = client.post("/api/pois", json={
+        "floor_id": upper, "x": 0, "y": 0, "label": "Office above",
+        "occupancy": 1.0, "area_class": "uncontrolled", "auto_height": True,
+        "linked_source_ids": [source_id],
+    }).json()
+    return project["pois"][0]["id"], source_id
+
+
+def test_distances_endpoint_exposes_components(client):
+    poi_id, source_id = two_floor_setup(client)
+    payload = client.get("/api/distances").json()
+    assert payload["display_unit"] == "ft"
+    link = payload["points"][0]["links"][0]
+    assert link["source_id"] == source_id
+    assert link["distance_m"] == pytest.approx(3.8)
+    assert link["vertical_m"] == pytest.approx(3.8)
+    assert link["horizontal_m"] == pytest.approx(0.0)
+    assert link["override_m"] is None
+    assert link["display"].startswith("12'")
+
+
+def test_entered_distance_overrides_geometry_and_changes_the_result(client):
+    poi_id, source_id = two_floor_setup(client)
+    before = client.get("/api/results").json()["results"][0]["methods"][0]["total"]
+
+    client.patch(f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: 7.6}})
+    payload = client.get("/api/distances").json()
+    link = payload["points"][0]["links"][0]
+    assert link["distance_m"] == 7.6
+    assert link["geometric_m"] == pytest.approx(3.8)
+
+    result = client.get("/api/results").json()["results"][0]
+    after = result["methods"][0]["total"]
+    assert after == pytest.approx(before / 4.0, rel=0.01)
+    assert result["contributions"][0]["geometric_distance_m"] == pytest.approx(3.8)
+    assert any("entered manually" in n for n in result["contributions"][0]["notes"])
+
+
+def test_clearing_an_override_returns_to_the_drawing_geometry(client):
+    poi_id, source_id = two_floor_setup(client)
+    client.patch(f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: 9.0}})
+    client.patch(f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: ""}})
+    link = client.get("/api/distances").json()["points"][0]["links"][0]
+    assert link["override_m"] is None
+    assert link["distance_m"] == pytest.approx(3.8)
+
+
+def test_invalid_overrides_are_rejected(client):
+    poi_id, source_id = two_floor_setup(client)
+    assert client.patch(
+        f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: -2}}
+    ).status_code == 400
+    assert client.patch(
+        f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: "abc"}}
+    ).status_code == 400
+
+
+def test_unlinking_a_source_drops_its_override(client):
+    poi_id, source_id = two_floor_setup(client)
+    client.patch(f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: 9.0}})
+    project = client.patch(f"/api/pois/{poi_id}", json={"linked_source_ids": []}).json()
+    assert project["pois"][0]["distance_overrides"] == {}
+
+
+def test_measurements_and_overrides_survive_save_and_reopen(client, tmp_path):
+    poi_id, source_id = two_floor_setup(client)
+    floor_id = client.get("/api/project").json()["floors"][0]["id"]
+    client.post(f"/api/floors/{floor_id}/measurements",
+                json={"p1": [0, 0], "p2": [80, 0], "label": "Wall standoff"})
+    client.patch(f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: 5.5}})
+
+    path = tmp_path / "measured.rsproj"
+    client.post("/api/project/save", json={"path": str(path)})
+    client.post("/api/project/new")
+    reopened = client.post("/api/project/load", json={"path": str(path)}).json()
+
+    assert reopened["floors"][0]["measurements"][0]["label"] == "Wall standoff"
+    assert reopened["floors"][0]["measurements"][0]["metres"] == pytest.approx(8.0)
+    assert reopened["pois"][0]["distance_overrides"] == {source_id: 5.5}
+
+
+def test_csv_export_records_the_geometric_distance_alongside_the_override(client):
+    poi_id, source_id = two_floor_setup(client)
+    client.patch(f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: 6.0}})
+    rows = list(csv.DictReader(io.StringIO(client.get("/api/results.csv").text)))
+    source_row = next(row for row in rows if row["row_type"] == "source")
+    assert float(source_row["distance_m"]) == 6.0
+    assert float(source_row["geometric_distance_m"]) == pytest.approx(3.8)

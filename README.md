@@ -21,7 +21,7 @@ This repository currently contains the calculation core.
 | 6. NCRP 147 CT scatter constants | needs source data |
 | 7. Barrier objects, report export | not started |
 
-117 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+145 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
 
 ## Install and run
 
@@ -44,12 +44,24 @@ needed for the GUI.
    core, lift shaft — on every floor. Each PDF has its own arbitrary origin, so
    without this, horizontal distances *between* floors are meaningless. The app
    warns when it is missing.
-4. **Place points.** Add sources and points of interest, drag to adjust. A new
+4. **Measure anything.** The *Measure* tool reports the distance between any two
+   clicked points — a wall standoff, a room width — with a live readout as you
+   drag out the second point. Naming a measurement keeps it on the drawing and in
+   the saved project; Esc cancels.
+5. **Place points.** Add sources and points of interest, drag to adjust. A new
    point of interest links to every existing source by default; edit the links
    in the inspector.
-5. **Calculate.** Every source linked to a point contributes and their doses are
+6. **Check the distances.** Each linked source shows its source-to-point distance,
+   broken into horizontal and vertical components, before you calculate. Type a
+   value into the box to override the drawing geometry — useful when the path is
+   not what the plan implies. The entered figure and the geometric one it replaced
+   both appear in the results and the CSV, and a discrepancy over 25% is flagged.
+7. **Calculate.** Every source linked to a point contributes and their doses are
    summed before the barrier is solved. Expand the detail row to see every
    intermediate value, or export the CSV.
+
+Distances display in feet-and-inches or metres — the toggle is in the header.
+The metric value is always shown alongside, since the physics works in metres.
 
 ## Use
 
