@@ -1,0 +1,10 @@
+workload,wnorm_ma_min_per_patient,patients_per_week
+Rad Room (all barriers),2.5,110
+Rad Room (chest bucky),0.6,110
+Rad Room (floor or other barriers),1.9,110
+Fluoroscopy Tube (R&F room),13,18
+Rad Tube (R&F room),1.5,23
+Chest Room,0.22,210
+Mammography Room,6.7,47
+Cardiac Angiography,160,19
+Peripheral Angiography,64,21

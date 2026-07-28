@@ -1,0 +1,7 @@
+occupancy_factor,area_description,verified
+1,"Administrative or clerical offices; treatment planning areas; attended waiting rooms; nurse stations; attending physician reading rooms; x-ray control rooms; laboratories; pharmacies; occupied space in adjacent buildings",NEEDS_VERIFICATION
+0.5,"Patient examination rooms adjacent to the imaging room",NEEDS_VERIFICATION
+0.2,"Corridors; patient rooms; employee lounges; staff rest rooms",NEEDS_VERIFICATION
+0.125,"Corridor doors",NEEDS_VERIFICATION
+0.05,"Public toilets; unattended vending areas; storage rooms; outdoor areas with seating; unattended waiting rooms; patient holding areas",NEEDS_VERIFICATION
+0.025,"Outdoor areas with only transient pedestrian or vehicular traffic; unattended parking lots; vehicular drop-off areas; attics; stairways; unattended elevators; janitors' closets",NEEDS_VERIFICATION

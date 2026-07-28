@@ -1,0 +1,10 @@
+workload,wnorm_ma_min_per_patient,field_area_cm2,d_f_m,leakage_mgy_per_patient,side_scatter_mgy_per_patient,k1sec_side_mgy_per_patient,fwd_back_scatter_mgy_per_patient,k1sec_fwd_back_mgy_per_patient,notes
+Rad Room (all barriers),2.5,1000,1,0.00053,0.034,0.034,0.048,0.049,
+Rad Room (chest bucky),0.6,1535,1.83,0.00039,0.0049,0.0053,0.0069,0.0073,F = 36x43 cm (14x17 in) field
+Rad Room (floor or other barriers),1.9,1000,1,0.00014,0.023,0.023,0.033,0.033,
+Fluoroscopy Tube (R&F room),13,730,0.8,0.012,0.31,0.32,0.44,0.46,F = 30.5 cm (12 in) dia. image intensifier
+Rad Tube (R&F room),1.5,1000,1,0.00094,0.028,0.029,0.039,0.04,
+Chest Room,0.22,1535,2,0.00038,0.0023,0.0027,0.0032,0.0036,F = 36x43 cm (14x17 in) field
+Mammography Room,6.7,720,0.58,1.1e-05,0.011,0.011,0.049,0.049,F = 24x30 cm cassette; leakage tech factors 50 kVp @ 5 mA (all others 150 kVp @ 3.3 mA -> 0.876 mGy/h)
+Cardiac Angiography,160,730,0.9,0.088,2.6,2.7,3.7,3.8,F = 30.5 cm (12 in) dia. image intensifier
+Peripheral Angiography,64,730,0.9,0.0034,0.66,0.66,0.95,0.95,F = 30.5 cm (12 in) dia. image intensifier Also applies to Neuroangiography

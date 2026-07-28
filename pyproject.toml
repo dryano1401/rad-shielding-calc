@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "radshield"
+version = "0.1.0"
+description = "Radiation shielding calculations for medical imaging facilities (NCRP 147, TG-108)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+pdf = ["pymupdf>=1.24"]
+web = ["fastapi>=0.110", "uvicorn>=0.29", "pymupdf>=1.24"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+radshield = ["physics/data/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

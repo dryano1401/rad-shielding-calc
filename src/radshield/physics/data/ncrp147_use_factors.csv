@@ -1,0 +1,5 @@
+barrier,use_factor,workload
+Floor,0.89,Rad Room (floor or other barriers)
+Cross-table wall,0.09,Rad Room (floor or other barriers)
+Wall No. 3 (other),0.02,Rad Room (floor or other barriers)
+Chest image receptor,1,Rad Room (chest bucky)

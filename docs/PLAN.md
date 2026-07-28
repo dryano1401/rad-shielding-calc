@@ -1,6 +1,25 @@
 # Radiation Shielding Calculation Application — Planning Document
 
-Status: **planning only, no implementation code written yet.**
+Status: **Phase 1 complete** (TG-108 engine + NCRP 147 tables, 78 tests passing).
+Phases 2-5 (PDF, placement, geometry, results) not started.
+
+Decisions taken, superseding the questions below where they conflict:
+
+- **Q1 app type** -- build the calculation core as a plain Python package first;
+  a FastAPI layer can be added later, potentially into an existing site. The
+  physics package has no UI or I/O dependencies, so this costs nothing later.
+- **Q2 reuse** -- NCRP 147 tables supplied as a spreadsheet extraction and
+  converted to CSV under `physics/data/`. Gaps are declared, not guessed.
+- **Q3 isotopes** -- extensibility is a first-class requirement: register a
+  nuclide and its Archer parameters, and the calculation path is unchanged.
+- **Q4 summation** -- all sources incident on a point are summed before the
+  transmission factor is derived. Implemented and tested against Table VII.
+- **Q5 distance convention** -- a per-point flag will record whether the
+  NCRP-recommended offset is already applied to the placed coordinate or must
+  be added by the app. Belongs to the geometry layer, Phase 4.
+
+See `methodology.md` for constants, provenance and the two discrepancies found
+in TG-108 itself.
 
 This document is the deliverable of the planning step: clarifying questions, proposed
 architecture, data model, file structure, and a phased build plan.

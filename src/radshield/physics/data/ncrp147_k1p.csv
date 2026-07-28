@@ -1,0 +1,5 @@
+workload,wnorm_ma_min_per_patient,k1p_mgy_per_patient
+Rad Room (chest bucky),0.6,2.3
+Rad Room (floor or other barriers),1.9,5.2
+Rad Tube (R&F Room),1.5,5.9
+Chest Room,0.22,1.2

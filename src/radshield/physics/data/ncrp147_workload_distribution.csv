@@ -1,0 +1,217 @@
+workload,kvp,ma_min_per_patient
+Rad Room (all barriers),25.0,0
+Rad Room (chest bucky),25.0,0
+Rad Room (floor or other barriers),25.0,0
+Fluoroscopy Tube (R&F room),25.0,0
+Rad Tube (R&F room),25.0,0
+Chest Room,25.0,0
+Mammography Room,25.0,0.925
+Cardiac Angiography,25.0,0
+Peripheral Angiography,25.0,0
+Rad Room (all barriers),30.0,0
+Rad Room (chest bucky),30.0,0
+Rad Room (floor or other barriers),30.0,0
+Fluoroscopy Tube (R&F room),30.0,0
+Rad Tube (R&F room),30.0,0
+Chest Room,30.0,0
+Mammography Room,30.0,4.67
+Cardiac Angiography,30.0,0
+Peripheral Angiography,30.0,0
+Rad Room (all barriers),35.0,0
+Rad Room (chest bucky),35.0,0
+Rad Room (floor or other barriers),35.0,0
+Fluoroscopy Tube (R&F room),35.0,0
+Rad Tube (R&F room),35.0,0
+Chest Room,35.0,0
+Mammography Room,35.0,1.1
+Cardiac Angiography,35.0,0
+Peripheral Angiography,35.0,0
+Rad Room (all barriers),40.0,0.000138
+Rad Room (chest bucky),40.0,0
+Rad Room (floor or other barriers),40.0,0.000138
+Fluoroscopy Tube (R&F room),40.0,0
+Rad Tube (R&F room),40.0,0
+Chest Room,40.0,0
+Mammography Room,40.0,0
+Cardiac Angiography,40.0,0
+Peripheral Angiography,40.0,0
+Rad Room (all barriers),45.0,0.00071
+Rad Room (chest bucky),45.0,0
+Rad Room (floor or other barriers),45.0,0.00071
+Fluoroscopy Tube (R&F room),45.0,0
+Rad Tube (R&F room),45.0,0.000578
+Chest Room,45.0,0
+Mammography Room,45.0,0
+Cardiac Angiography,45.0,0
+Peripheral Angiography,45.0,0
+Rad Room (all barriers),50.0,0.00848
+Rad Room (chest bucky),50.0,0.00678
+Rad Room (floor or other barriers),50.0,0.0017
+Fluoroscopy Tube (R&F room),50.0,0
+Rad Tube (R&F room),50.0,0.000765
+Chest Room,50.0,0
+Mammography Room,50.0,0
+Cardiac Angiography,50.0,0.34
+Peripheral Angiography,50.0,0.0894
+Rad Room (all barriers),55.0,0.0109
+Rad Room (chest bucky),55.0,0.000456
+Rad Room (floor or other barriers),55.0,0.0104
+Fluoroscopy Tube (R&F room),55.0,0.0702
+Rad Tube (R&F room),55.0,0.000726
+Chest Room,55.0,0
+Mammography Room,55.0,0
+Cardiac Angiography,55.0,0.42
+Peripheral Angiography,55.0,0.0398
+Rad Room (all barriers),60.0,0.0981
+Rad Room (chest bucky),60.0,0.00896
+Rad Room (floor or other barriers),60.0,0.0891
+Fluoroscopy Tube (R&F room),60.0,0.113
+Rad Tube (R&F room),60.0,0.0152
+Chest Room,60.0,0
+Mammography Room,60.0,0
+Cardiac Angiography,60.0,1.96
+Peripheral Angiography,60.0,0.699
+Rad Room (all barriers),65.0,0.104
+Rad Room (chest bucky),65.0,0.0342
+Rad Room (floor or other barriers),65.0,0.07
+Fluoroscopy Tube (R&F room),65.0,0.187
+Rad Tube (R&F room),65.0,0.0252
+Chest Room,65.0,0
+Mammography Room,65.0,0
+Cardiac Angiography,65.0,4.55
+Peripheral Angiography,65.0,15
+Rad Room (all barriers),70.0,0.458
+Rad Room (chest bucky),70.0,0.0725
+Rad Room (floor or other barriers),70.0,0.385
+Fluoroscopy Tube (R&F room),70.0,0.145
+Rad Tube (R&F room),70.0,0.0889
+Chest Room,70.0,0.0202
+Mammography Room,70.0,0
+Cardiac Angiography,70.0,6.03
+Peripheral Angiography,70.0,12.2
+Rad Room (all barriers),75.0,0.501
+Rad Room (chest bucky),75.0,0.0953
+Rad Room (floor or other barriers),75.0,0.405
+Fluoroscopy Tube (R&F room),75.0,0.194
+Rad Tube (R&F room),75.0,0.224
+Chest Room,75.0,0.00236
+Mammography Room,75.0,0
+Cardiac Angiography,75.0,8.02
+Peripheral Angiography,75.0,15.3
+Rad Room (all barriers),80.0,0.56
+Rad Room (chest bucky),80.0,0.14
+Rad Room (floor or other barriers),80.0,0.42
+Fluoroscopy Tube (R&F room),80.0,1.72
+Rad Tube (R&F room),80.0,0.428
+Chest Room,80.0,0
+Mammography Room,80.0,0
+Cardiac Angiography,80.0,25.4
+Peripheral Angiography,80.0,11
+Rad Room (all barriers),85.0,0.315
+Rad Room (chest bucky),85.0,0.0662
+Rad Room (floor or other barriers),85.0,0.249
+Fluoroscopy Tube (R&F room),85.0,2.19
+Rad Tube (R&F room),85.0,0.218
+Chest Room,85.0,0.000783
+Mammography Room,85.0,0
+Cardiac Angiography,85.0,40.3
+Peripheral Angiography,85.0,4.09
+Rad Room (all barriers),90.0,0.176
+Rad Room (chest bucky),90.0,0.0141
+Rad Room (floor or other barriers),90.0,0.162
+Fluoroscopy Tube (R&F room),90.0,1.46
+Rad Tube (R&F room),90.0,0.0533
+Chest Room,90.0,0
+Mammography Room,90.0,0
+Cardiac Angiography,90.0,21
+Peripheral Angiography,90.0,3.43
+Rad Room (all barriers),95.0,0.0218
+Rad Room (chest bucky),95.0,0.00351
+Rad Room (floor or other barriers),95.0,0.0182
+Fluoroscopy Tube (R&F room),95.0,1.15
+Rad Tube (R&F room),95.0,0.0489
+Chest Room,95.0,0
+Mammography Room,95.0,0
+Cardiac Angiography,95.0,10.6
+Peripheral Angiography,95.0,0.673
+Rad Room (all barriers),100.0,0.0155
+Rad Room (chest bucky),100.0,0.000884
+Rad Room (floor or other barriers),100.0,0.0146
+Fluoroscopy Tube (R&F room),100.0,1.12
+Rad Tube (R&F room),100.0,0.0587
+Chest Room,100.0,0.0301
+Mammography Room,100.0,0
+Cardiac Angiography,100.0,7.4
+Peripheral Angiography,100.0,1.53
+Rad Room (all barriers),105.0,0.00348
+Rad Room (chest bucky),105.0,0.00197
+Rad Room (floor or other barriers),105.0,0.00151
+Fluoroscopy Tube (R&F room),105.0,0.964
+Rad Tube (R&F room),105.0,0.105
+Chest Room,105.0,0
+Mammography Room,105.0,0
+Cardiac Angiography,105.0,7.02
+Peripheral Angiography,105.0,0.0927
+Rad Room (all barriers),110.0,0.0105
+Rad Room (chest bucky),110.0,0.00991
+Rad Room (floor or other barriers),110.0,0.000551
+Fluoroscopy Tube (R&F room),110.0,0.747
+Rad Tube (R&F room),110.0,0.0646
+Chest Room,110.0,0.0214
+Mammography Room,110.0,0
+Cardiac Angiography,110.0,6.59
+Peripheral Angiography,110.0,0.0305
+Rad Room (all barriers),115.0,0.041
+Rad Room (chest bucky),115.0,0.0374
+Rad Room (floor or other barriers),115.0,0.00369
+Fluoroscopy Tube (R&F room),115.0,1.44
+Rad Tube (R&F room),115.0,0.029
+Chest Room,115.0,0.0936
+Mammography Room,115.0,0
+Cardiac Angiography,115.0,13.8
+Peripheral Angiography,115.0,0
+Rad Room (all barriers),120.0,0.0699
+Rad Room (chest bucky),120.0,0.0512
+Rad Room (floor or other barriers),120.0,0.0187
+Fluoroscopy Tube (R&F room),120.0,0.937
+Rad Tube (R&F room),120.0,0.104
+Chest Room,120.0,0.0474
+Mammography Room,120.0,0
+Cardiac Angiography,120.0,3.35
+Peripheral Angiography,120.0,0
+Rad Room (all barriers),125.0,0.0484
+Rad Room (chest bucky),125.0,0.0481
+Rad Room (floor or other barriers),125.0,0.000347
+Fluoroscopy Tube (R&F room),125.0,0.138
+Rad Tube (R&F room),125.0,0.0813
+Chest Room,125.0,0
+Mammography Room,125.0,0
+Cardiac Angiography,125.0,2.75
+Peripheral Angiography,125.0,0
+Rad Room (all barriers),130.0,0.00184
+Rad Room (chest bucky),130.0,0.00171
+Rad Room (floor or other barriers),130.0,0.000125
+Fluoroscopy Tube (R&F room),130.0,0.153
+Rad Tube (R&F room),130.0,0.0446
+Chest Room,130.0,0
+Mammography Room,130.0,0
+Cardiac Angiography,130.0,0.031
+Peripheral Angiography,130.0,0
+Rad Room (all barriers),135.0,0.00773
+Rad Room (chest bucky),135.0,0.00773
+Rad Room (floor or other barriers),135.0,0
+Fluoroscopy Tube (R&F room),135.0,0.146
+Rad Tube (R&F room),135.0,0.00947
+Chest Room,135.0,0
+Mammography Room,135.0,0
+Cardiac Angiography,135.0,0
+Peripheral Angiography,135.0,0
+Rad Room (all barriers),140.0,0
+Rad Room (chest bucky),140.0,0
+Rad Room (floor or other barriers),140.0,0
+Fluoroscopy Tube (R&F room),140.0,0.0192
+Rad Tube (R&F room),140.0,0.00426
+Chest Room,140.0,0
+Mammography Room,140.0,0
+Cardiac Angiography,140.0,0
+Peripheral Angiography,140.0,0

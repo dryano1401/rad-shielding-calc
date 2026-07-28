@@ -1,0 +1,201 @@
+# Methodology, data provenance and known discrepancies
+
+This document records where every constant comes from and where the source
+documents disagree with themselves. It is intended to be readable by a
+reviewer checking a shielding report produced with this tool.
+
+## 1. The shared transmission model
+
+Both methodologies use the Archer three-parameter broad-beam model:
+
+    B(x) = [ (1 + b/a) * exp(a*g*x) - b/a ] ^ (-1/g)
+    x(B) = ln[ (B^-g + b/a) / (1 + b/a) ] / (a*g)
+
+Implemented once in `radshield.physics.archer`. Adding an isotope or material
+is a data change, not a code change.
+
+**Unit trap.** NCRP 147 tabulates alpha and beta in mm^-1; TG-108 tabulates
+them in cm^-1. Confusing them is a factor-of-ten error in barrier thickness.
+`ArcherParams.unit` carries the unit with the parameters, and
+`test_units_differ_between_methodologies` pins the distinction.
+
+TG-108 compounds the trap: its Table IV prints lead thickness in **mm** while
+its Table V parameters are in **cm^-1**. `test_tg108_table_iv_lead` verifies
+the conversion explicitly.
+
+## 2. TG-108 (PET / nuclear medicine)
+
+Source: Madsen et al., *AAPM Task Group 108: PET and PET/CT Shielding
+Requirements*, Med Phys 33(1), 14-24, 2006.
+
+### Equations
+
+    uptake room (Eq. 3):   D_week = G * N_w * A0 * t_U * R(t_U) / d^2
+    imaging room (Eq. 9):  D_week = G * N_w * A0 * v * F_U * t_I * R(t_I) / d^2
+    transmission (Eq. 4):  B = P / (T * D_week)
+
+    R(t) = 1.443 * (T_half / t) * (1 - exp(-0.693 * t / T_half))    [Eq. 1]
+    F_U  = exp(-0.693 * t_U / T_half)
+
+`G` is the patient-self-attenuated effective dose equivalent rate constant:
+**0.092 uSv m^2 / (MBq h)** for F-18, against 0.143 free in air (Table II).
+
+Occupancy scales the *design goal*, not the reported dose, per the footnote to
+Table VII. Reported weekly doses are therefore unmodified by T.
+
+### Constants
+
+| Quantity | Value | Source |
+|---|---|---|
+| F-18 half-life | 110 min | TG-108 (used throughout its examples) |
+| F-18 dose-rate constant, in air | 0.143 uSv m^2 / MBq h | Table II (ANSI/ANS-6.1.1 1991) |
+| F-18, patient-attenuated | 0.092 uSv m^2 / MBq h | Eqs. 2-12 |
+| Voiding credit | 0.85 | imaging-room text |
+| Design goal, uncontrolled | 20 uSv/week | 1 mSv/y public limit |
+| Design goal, controlled | 100 uSv/week | 5 mSv/y ALARA target |
+| Archer fits at 511 keV | Pb 1.543 / -0.4408 / 2.136; concrete 0.1539 / -0.1161 / 2.0752; iron 0.5704 / -0.3063 / 0.6326 (cm^-1) | Table V |
+
+### Floor and ceiling geometry (Fig. 5)
+
+Source assumed 1.0 m above its floor; target 0.5 m above the floor for the
+room above, 1.7 m above the floor for the room below:
+
+    d_above = H - 1.0 + 0.5        d_below = H + 1.0 - 1.7
+
+For H = 4.3 m these give 3.8 m and 3.6 m, matching Examples 4 and 5.
+
+### Extension to isotopes TG-108 does not cover
+
+The equations are isotope-agnostic; only the constants change. Register the
+nuclide and its Archer parameters and the pipeline is unchanged:
+
+```python
+register_nuclide(Nuclide("Tc-99m", half_life_min=360.6, gamma_eff=0.0195,
+                         gamma_patient=0.0140, is_511_kev=False, source="..."))
+register_archer("Tc-99m", ArcherParams(alpha=..., beta=..., gamma=...,
+                                       unit="cm", material="lead", source="..."))
+```
+
+Two guards apply. Transmission fits at 511 keV are shared automatically across
+positron emitters because the attenuation belongs to the photon energy, not
+the parent nuclide. But the F-18 patient-self-attenuation ratio (0.092/0.143)
+is **not** applied to non-511 keV isotopes; `patient_dose_rate_constant` raises
+instead, because body attenuation at 140 keV is not that at 511 keV. Supply
+`gamma_patient` explicitly.
+
+Results for non-511 keV isotopes should be labelled "TG-108 method extended to
+\<isotope\>", not "TG-108" — TG-108 is a PET/PET-CT document and does not
+provide a SPECT barrier method.
+
+### Discrepancies found in TG-108
+
+Both were found by reproducing the report's own examples and are encoded in the
+test suite with explanatory comments rather than tuned away.
+
+**(a) Table VII omits the voiding credit that Example 2 applies.**
+Example 2 reports 59.7 uSv/week at 3 m from the tomograph. Table VII reports
+70.1 uSv for the same facility and distance. 59.7 / 0.85 = 70.2, so the table
+does not apply the 0.85 voiding factor. Reproducing Table VII therefore
+requires `void_factor=1.0`; with that, all rows agree to better than 1.5%:
+
+| Room | Model | Table VII | Diff |
+|---|---|---|---|
+| Office 1 | 97.4 | 97.2 | +0.2% |
+| Office 2 | 118.1 | 118.8 | -0.6% |
+| Office 3 | 39.6 | 40.0 | -1.0% |
+| Office 8 | 44.7 | 45.3 | -1.4% |
+| Office 9 | 28.9 | 29.2 | -1.1% |
+| Corridor 1 | 374.1 | 378.8 | -1.2% |
+
+Practical effect: taking the voiding credit is the less conservative choice.
+The default here is to take it (0.85, as Example 2 does), and it is a per-source
+input so it can be disabled.
+
+**(b) Example 4's concrete figure contradicts its own Table IV.**
+Example 4 derives B = 0.17 and states "1.3 cm of lead or 17 cm of concrete".
+The lead figure is consistent with Table IV. The concrete figure is not:
+Table IV gives 0.2243 at 14 cm and 0.1662 at 16 cm, so B = 0.170 corresponds to
+~15.8 cm, not 17 cm. The Archer fit reproduces Table IV to better than 1% at
+every tabulated point, and returns 15.83 cm. This implementation follows the
+fit. Using 17 cm is conservative, so the discrepancy does not create a safety
+issue, but a reviewer comparing against the printed example should know why the
+numbers differ.
+
+## 3. NCRP 147 (x-ray, fluoroscopy, CT)
+
+Source: NCRP Report No. 147, *Structural Shielding Design for Medical X-Ray
+Imaging Facilities*, 2015 printing. Tables transcribed by text extraction and
+shipped as CSV under `physics/data/`.
+
+### Equations
+
+    primary (Eq. 4.2):    B_p   = P * d_P^2   / (K1^P   * U * N * T)
+    secondary (Eq. 4.5):  B_sec = P * d_sec^2 / (K1^sec *     N * T)
+
+K1 values are unshielded air kerma **per patient at 1 m**, in mGy. The design
+goal P is in mGy air kerma per week: 0.02 uncontrolled, 0.1 controlled.
+
+Point of protection is 0.3 m beyond the distal barrier surface. That offset is
+a geometry-layer concern, not applied inside the physics functions.
+
+### Shipped tables
+
+| File | Source table | Contents |
+|---|---|---|
+| `ncrp147_primary_archer_kvp.csv` | A.1 | primary fits per 5 kVp, 6 materials |
+| `ncrp147_primary_archer_workload.csv` | B.1 | primary fits per workload distribution |
+| `ncrp147_secondary_archer.csv` | C.1 | secondary fits, per kVp and per workload |
+| `ncrp147_workload_distribution.csv` | 4.2 | kVp distribution of workload |
+| `ncrp147_workload_totals.csv` | 4.2 | Wnorm and surveyed patients/week |
+| `ncrp147_use_factors.csv` | 4.4 | primary use factors U |
+| `ncrp147_k1p.csv` | 4.5 | K1^P primary air kerma per patient |
+| `ncrp147_k1sec.csv` | 4.7 | leakage and scatter kerma per patient |
+| `ncrp147_occupancy.csv` | B.1 | occupancy factors — **unverified, see below** |
+
+Workload-distribution-weighted fits (B.1, C.1) are preferred over single-kVp
+fits because they are pre-integrated over the clinical spectrum.
+
+### Known gaps in the extraction
+
+Declared in `tables.KNOWN_GAPS` and raised as informative errors at lookup
+time. A missing entry never silently falls back to a neighbouring value.
+
+1. **Table A.1**: 40 and 45 kVp captured for concrete only; other materials
+   jump 35 -> 50 kVp.
+2. **Table B.1**: Peripheral Angiography missing for steel, plate glass, wood.
+3. **Table C.1**: for steel, plate glass and wood only 30, 50, 70, 125 and
+   150 kVp were captured; the 100 kVp row and all workload rows are absent.
+4. **Occupancy factors** were not part of the extraction. The shipped table is
+   seeded from the published values and every row is flagged
+   `NEEDS_VERIFICATION`. Verify against NCRP 147 Table B.1 before use in a
+   report.
+5. **CT scatter data** (Section 5 isodose maps / DLP scatter fractions) was not
+   extracted. `ct.CTScatterModel` therefore *requires* caller-supplied kappa or
+   isodose values and refuses to default them, and requires a `source` string
+   so the audit trail can cite where the number came from.
+
+### Validation status
+
+The extracted set contains no worked examples, so the NCRP 147 tests verify
+table integrity, unit handling, equation structure and the gap error paths —
+not published end-to-end answers. Two independent physical cross-checks do
+pass: lead at 100 kVp gives an asymptotic HVL of 0.277 mm against NCRP's
+published ~0.27 mm, and transmission at 0.25 mm and 1.0 mm lands on the
+published curve. When NCRP 147's Section 5 examples become available they
+should be added as end-to-end fixtures, matching the TG-108 test file.
+
+## 4. Summing sources at a point
+
+Where several sources are incident on one point, their unshielded doses are
+summed *before* the transmission factor is derived — TG-108 Table VII does
+exactly this for the uptake room and tomograph. The barrier requirement is
+therefore a property of the point, not of a source-point pair.
+
+Caveat: summation is only physically correct when the same barrier lies
+between the point and every summed source. Sources reaching a point through
+different walls will over-shield. Explicit barrier objects are the planned
+remedy (Phase 7).
+
+Where summed NCRP 147 sources carry different workload distributions, the
+summed transmission requirement is solved with each source's own Archer
+parameters and the governing (largest) thickness is returned.

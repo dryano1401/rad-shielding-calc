@@ -1,0 +1,9 @@
+nuclide,half_life_min,gamma_eff_uSv_m2_per_MBq_h,gamma_patient_uSv_m2_per_MBq_h,source
+F-18,110,0.143,0.092,TG-108 Table II; 0.092 is the patient-self-attenuated value used in Eqs. 2-12
+C-11,20.4,0.148,,TG-108 Table II
+N-13,9.97,0.148,,TG-108 Table II
+O-15,2.04,0.148,,TG-108 Table II
+Cu-64,762,0.029,,TG-108 Table II
+Ga-68,67.6,0.134,,TG-108 Table II
+Rb-82,1.27,0.159,,TG-108 Table II
+I-124,6019,0.185,,TG-108 Table II

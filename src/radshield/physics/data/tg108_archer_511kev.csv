@@ -1,0 +1,4 @@
+material,alpha_per_cm,beta_per_cm,gamma,source
+lead,1.543,-0.4408,2.136,TG-108 Table V (511 keV broad beam)
+concrete,0.1539,-0.1161,2.0752,TG-108 Table V (511 keV broad beam; density 2.35 g/cm3)
+iron,0.5704,-0.3063,0.6326,TG-108 Table V (511 keV broad beam)
