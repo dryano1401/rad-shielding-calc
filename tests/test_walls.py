@@ -384,3 +384,16 @@ def test_projects_saved_before_walls_existed_still_load():
     restored = Project.from_dict(data)
     assert restored.floor("fl1").walls == []
     assert restored.apply_obliquity is False
+
+
+def test_absurd_thickness_is_rejected_as_a_units_slip():
+    """A wall entered in metres where millimetres were meant is caught.
+
+    The interface once multiplied a metric entry by 1000, so typing 200 for a
+    200 mm wall produced a 200 m one and silently shielded everything behind
+    it.
+    """
+    with pytest.raises(ValueError, match="thicker than any real barrier"):
+        Wall(id="w", p1=(0, 0), p2=(10, 0), thickness_mm=200_000)
+    # A thick concrete bunker wall is still accepted.
+    assert Wall(id="w", p1=(0, 0), p2=(10, 0), thickness_mm=2000).thickness_mm == 2000

@@ -713,3 +713,39 @@ def test_deleting_a_chart_unassigns_it(client):
     # The calculation reports the missing chart rather than crashing.
     result = client.get("/api/results").json()["results"][0]
     assert any("no chart is assigned" in e for e in result["errors"])
+
+
+def test_wall_thickness_is_editable_after_drawing(client):
+    floor_id, _, _ = wall_scenario(client)
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete",
+        "thickness_mm": 203.2, "top_height_m": 3.0,
+    }).json()
+    wall_id = project["floors"][0]["walls"][0]["id"]
+
+    project = client.patch(f"/api/floors/{floor_id}/walls/{wall_id}",
+                           json={"thickness_mm": 152.4, "top_height_m": 4.2}).json()
+    wall = project["floors"][0]["walls"][0]
+    assert wall["thickness_mm"] == pytest.approx(152.4)
+    assert wall["top_height_m"] == pytest.approx(4.2)
+    assert wall["p1"] == [0, -50]        # the drawn geometry is untouched
+
+    # A thinner wall attenuates less, so the requirement rises.
+    thinner = client.get("/api/results").json()["results"][0]
+    client.patch(f"/api/floors/{floor_id}/walls/{wall_id}", json={"thickness_mm": 400.0})
+    thicker = client.get("/api/results").json()["results"][0]
+    assert (thicker["contributions"][0]["path_transmission"]
+            < thinner["contributions"][0]["path_transmission"])
+
+
+def test_editing_a_wall_to_an_absurd_thickness_is_rejected(client):
+    floor_id, _, _ = wall_scenario(client)
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "thickness_mm": 200}).json()
+    wall_id = project["floors"][0]["walls"][0]["id"]
+    response = client.patch(f"/api/floors/{floor_id}/walls/{wall_id}",
+                            json={"thickness_mm": 200_000})
+    assert response.status_code == 400
+    assert "millimetres" in response.json()["detail"]
+    # The original wall survives a rejected edit.
+    assert client.get("/api/project").json()["floors"][0]["walls"][0]["thickness_mm"] == 200

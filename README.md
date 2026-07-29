@@ -22,7 +22,7 @@ This repository currently contains the calculation core.
 | 7. NCRP 147 CT, DLP and chart methods | **complete** |
 | 8. Formatted report export | not started |
 
-220 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+223 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
 
 ## Install and run
 
@@ -69,7 +69,7 @@ needed for the GUI.
 
 Distances display in feet-and-inches or metres — the toggle is in the header.
 The metric value is always shown alongside, since the physics works in metres.
-Wall thickness is entered in inches in feet mode, millimetres in metric.
+Wall thickness is entered in inches in feet mode and millimetres in metric — nobody dimensions a wall in metres. It stays editable after drawing.
 
 The *Obliquity* toggle scales a barrier's thickness by `1/cos(angle)` for paths
 crossing at an angle. It is off by default, which under-counts material and so

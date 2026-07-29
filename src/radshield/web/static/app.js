@@ -589,11 +589,8 @@ canvas.addEventListener('click', async event => {
     }
     const [p1, p2] = state.wallPick;
     state.wallPick = [];
-    // Thickness is entered in the display unit; the model stores millimetres.
     const entered = parseFloat(document.getElementById('wall-thickness').value);
-    const thicknessMm = displayUnit() === 'm'
-      ? entered * 1000
-      : toMetres(entered / 12) * 1000;   // feet mode: the field is inches
+    const thicknessMm = wallThicknessToMm(entered);
     try {
       setProject(await send(`/api/floors/${floor.id}/walls`, 'POST', {
         p1: [p1.x, p1.y], p2: [p2.x, p2.y],
@@ -704,9 +701,16 @@ function renderAll() {
 }
 
 // Wall thickness is entered in inches in feet mode, millimetres in metric.
-const wallUnitLabel = () => (displayUnit() === 'm' ? 'millimetres' : 'inches');
+// Barrier thickness is entered in millimetres under metric and inches under
+// feet -- nobody dimensions a wall in metres. The model always stores
+// millimetres, and these three helpers are the only place that is converted.
+const wallUnitLabel = () => (displayUnit() === 'm' ? 'mm' : 'inches');
+const wallThicknessToMm = entered =>
+  displayUnit() === 'm' ? entered : entered * 25.4;
+const wallThicknessFromMm = mm =>
+  displayUnit() === 'm' ? mm : mm / 25.4;
 const wallThicknessDisplay = mm =>
-  displayUnit() === 'm' ? `${mm.toFixed(0)} mm` : `${(mm / 25.4).toFixed(2)}"`;
+  displayUnit() === 'm' ? `${mm.toFixed(2)} mm` : `${(mm / 25.4).toFixed(2)}"`;
 
 function renderWalls() {
   const select = document.getElementById('wall-material');
@@ -736,7 +740,16 @@ function renderWalls() {
       <div class="detail">
         <select data-w="material">${(state.options?.materials || []).map(m =>
           `<option ${wall.material === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
-        ${wallThicknessDisplay(wall.thickness_mm)} · top ${wall.top_height_m} m
+        <span class="reading">${wallThicknessDisplay(wall.thickness_mm)}</span>
+      </div>
+      <div class="wall-fields">
+        <label>Thickness (${wallUnitLabel()})
+          <input type="number" step="0.01" min="0"
+                 value="${wallThicknessFromMm(wall.thickness_mm).toFixed(2)}" data-w="thickness">
+        </label>
+        <label>Top (m)
+          <input type="number" step="0.1" value="${wall.top_height_m}" data-w="top">
+        </label>
       </div>`;
 
     const patch = async body => {
@@ -745,6 +758,13 @@ function renderWalls() {
     };
     div.querySelector('[data-w=label]').onchange = e => patch({ label: e.target.value });
     div.querySelector('[data-w=material]').onchange = e => patch({ material: e.target.value });
+    div.querySelector('[data-w=thickness]').onchange = e => {
+      const entered = parseFloat(e.target.value);
+      if (!(entered > 0)) { alert('Wall thickness must be greater than zero.'); renderWalls(); return; }
+      patch({ thickness_mm: wallThicknessToMm(entered) });
+    };
+    div.querySelector('[data-w=top]').onchange = e =>
+      patch({ top_height_m: parseFloat(e.target.value) });
     div.querySelector('[data-w=delete]').onclick = async () =>
       setProject(await api(`/api/floors/${floor.id}/walls/${wall.id}`, { method: 'DELETE' }));
     list.appendChild(div);

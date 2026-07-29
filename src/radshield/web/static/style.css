@@ -210,3 +210,11 @@ dialog textarea {
 .map-item .top { display: flex; align-items: center; gap: 6px; }
 .map-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-item .detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+
+.wall .reading { font-variant-numeric: tabular-nums; }
+.wall-fields { display: flex; gap: 6px; margin-top: 5px; }
+.wall-fields label {
+  flex: 1; display: flex; flex-direction: column; gap: 2px;
+  color: var(--muted); font-size: 11px;
+}
+.wall-fields input { width: 100%; }

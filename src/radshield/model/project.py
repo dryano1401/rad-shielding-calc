@@ -29,6 +29,11 @@ LENGTH_UNITS: dict[str, float] = {
 }
 
 
+# No structural barrier is metres thick.  Anything beyond this is a units
+# slip, and saying so is far better than silently shielding with a 200 m wall.
+MAX_WALL_THICKNESS_MM = 3000.0
+
+
 def new_id(prefix: str) -> str:
     """Return a short unique identifier with a readable prefix."""
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
@@ -153,6 +158,12 @@ class Wall:
     def __post_init__(self) -> None:
         if self.thickness_mm <= 0:
             raise ValueError(f"wall thickness must be positive, got {self.thickness_mm}")
+        if self.thickness_mm > MAX_WALL_THICKNESS_MM:
+            raise ValueError(
+                f"wall thickness of {self.thickness_mm:g} mm exceeds "
+                f"{MAX_WALL_THICKNESS_MM:g} mm, which is thicker than any real barrier; "
+                "check the entry is in millimetres and not metres"
+            )
         if self.top_height_m <= self.base_height_m:
             raise ValueError(
                 f"wall top ({self.top_height_m}) must be above its base ({self.base_height_m})"
