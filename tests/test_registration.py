@@ -19,7 +19,7 @@ from radshield.model.geometry import (
     floor_frame,
     floor_offset_m,
 )
-from radshield.model.project import Calibration, Floor, PointOfInterest, Project
+from radshield.model.project import Calibration, PointOfInterest, Project
 
 from .test_geometry_and_engine import build_project, uptake_source
 
