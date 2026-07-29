@@ -261,6 +261,31 @@ published ~0.27 mm, and transmission at 0.25 mm and 1.0 mm lands on the
 published curve. When NCRP 147's Section 5 examples become available they
 should be added as end-to-end fixtures, matching the TG-108 test file.
 
+## 3a. Registering drawings to each other
+
+Each floor's PDF has its own arbitrary origin, and sheets often lay the
+building out at different orientations. Cross-floor geometry therefore needs
+the drawings registered to one another, which is done by marking the same two
+physical features -- columns, a stair core, a lift shaft -- on every floor.
+
+Two features define a **similarity transform**: translation, rotation and
+uniform scale. That is the complete and correct model for architectural
+drawings, which are never sheared and never scaled differently along their two
+axes.
+
+One feature gives only the translation. It cannot express how a drawing is
+turned, so a sheet at another orientation stays wrong however carefully the
+single point is placed, and the error reaches the calculated distances rather
+than just the display. On a sheet rotated 90 degrees, a point placed at the
+same physical spot as the source one storey up reckons as 5.54 m away with one
+feature and 3.80 m -- correct, directly overhead -- with two. The app reports
+when a floor has only one.
+
+**Consistency check.** The two features are the same two physical things on
+every floor, so every floor must agree on how far apart they are. A
+disagreement beyond 2% means a wrong scale or a misplaced feature, either of
+which would quietly skew every cross-floor distance, and is reported.
+
 ## 4. Barriers on a path
 
 A wall drawn on a plan is a vertical rectangle: its plan segment extruded

@@ -25,7 +25,12 @@ from ..engine.evaluate import (
     reference_dose,
     results_to_rows,
 )
-from ..model.geometry import check_project, format_length, measurement_length
+from ..model.geometry import (
+    alignment_span_m,
+    check_project,
+    format_length,
+    measurement_length,
+)
 from ..model.project import (
     LENGTH_UNITS,
     Barrier,
@@ -72,6 +77,12 @@ def _project_payload() -> dict[str, Any]:
         )
         floor["metres_per_unit"] = (
             stored.calibration.metres_per_unit if stored.calibration else None
+        )
+        span = alignment_span_m(stored)
+        floor["alignment_span_m"] = span
+        floor["alignment_state"] = (
+            "oriented" if stored.is_oriented
+            else "positioned" if stored.alignment else "none"
         )
         for raw, item in zip(floor["measurements"], stored.measurements):
             if stored.calibration:
@@ -206,6 +217,9 @@ def update_floor(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     if "alignment" in payload:
         value = payload["alignment"]
         floor.alignment = tuple(value) if value else None
+    if "alignment2" in payload:
+        value = payload["alignment2"]
+        floor.alignment2 = tuple(value) if value else None
     if "calibration" in payload:
         value = payload["calibration"]
         if not value:

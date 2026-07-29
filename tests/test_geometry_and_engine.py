@@ -17,7 +17,7 @@ from radshield.model.store import load, save
 
 
 def build_project(floor_to_floor_m: float = 4.3) -> Project:
-    """Three stacked floors, all calibrated at 1 PDF unit = 0.1 m, aligned at the origin."""
+    """Three stacked floors at 1 PDF unit = 0.1 m, registered by two features."""
     project = Project(name="test")
     for index, name in enumerate(["Below", "Source", "Above"]):
         project.floors.append(
@@ -29,6 +29,10 @@ def build_project(floor_to_floor_m: float = 4.3) -> Project:
                 elevation_m=index * floor_to_floor_m,
                 calibration=Calibration(p1=(0, 0), p2=(100, 0), known_distance=10, unit="m"),
                 alignment=(0.0, 0.0),
+                # A second reference feature along +x, so the frame is exactly
+                # the one a single point implied and every expectation below
+                # is unchanged -- but the drawings are now properly registered.
+                alignment2=(100.0, 0.0),
                 page_width=600,
                 page_height=400,
             )

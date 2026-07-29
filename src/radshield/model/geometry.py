@@ -100,32 +100,81 @@ def measurement_length(floor: Floor, item: Measurement) -> float:
     return measure(floor, item.p1, item.p2)
 
 
-def floor_offset_m(floor: Floor, x: float, y: float) -> tuple[float, float, list[str]]:
-    """Convert a PDF-space point to metres relative to the floor's alignment point.
+def floor_frame(floor: Floor) -> tuple[float, float, float, float, float, list[str]]:
+    """The frame a floor's reference features define, for placing its points.
 
-    Returns:
-        ``(east_m, north_m, warnings)``.  PDF space has y increasing downward,
-        so the north component is negated to give a conventional plan
-        orientation.  Only differences matter, so the sign convention just has
-        to be consistent.
+    Returns ``(origin_x, origin_y, along_x, along_y, scale, warnings)`` where
+    ``along`` is a unit vector in PDF space pointing from the first reference
+    feature to the second.
+
+    With two features the frame carries the drawing's rotation, so sheets laid
+    out at different orientations still resolve to the same real-world
+    positions.  With one, the drawing is assumed square to the page, which is
+    only right when every sheet happens to share an orientation.  With none,
+    the page origin is assumed common, which is weaker still.  Each fallback
+    says so.
     """
     if floor.calibration is None:
         raise GeometryError(
             f"floor {floor.name!r} has no scale calibration; calibrate it before calculating"
         )
     scale = floor.calibration.metres_per_unit
-
     warnings: list[str] = []
+
     if floor.alignment is None:
-        origin_x, origin_y = 0.0, 0.0
         warnings.append(
             f"floor {floor.name!r} has no alignment point; its drawing origin is assumed "
             "co-registered with the other floors. Cross-floor horizontal distances may be wrong."
         )
-    else:
-        origin_x, origin_y = floor.alignment
+        return 0.0, 0.0, 1.0, 0.0, scale, warnings
 
-    return (x - origin_x) * scale, -(y - origin_y) * scale, warnings
+    origin_x, origin_y = floor.alignment
+    if floor.alignment2 is None:
+        warnings.append(
+            f"floor {floor.name!r} has only one alignment point, which fixes where its drawing "
+            "sits but not how it is turned. Add a second reference feature if the sheets are "
+            "laid out at different orientations."
+        )
+        return origin_x, origin_y, 1.0, 0.0, scale, warnings
+
+    dx = floor.alignment2[0] - origin_x
+    dy = floor.alignment2[1] - origin_y
+    span = math.hypot(dx, dy)
+    if span < 1e-9:
+        warnings.append(
+            f"floor {floor.name!r} has both alignment points in the same place, so they cannot "
+            "fix its rotation; the drawing is assumed square to the page."
+        )
+        return origin_x, origin_y, 1.0, 0.0, scale, warnings
+
+    return origin_x, origin_y, dx / span, dy / span, scale, warnings
+
+
+def floor_offset_m(floor: Floor, x: float, y: float) -> tuple[float, float, list[str]]:
+    """Convert a PDF-space point to metres in the frame the floor's features define.
+
+    Returns:
+        ``(along_m, across_m, warnings)``.  The axes run along the line joining
+        the two reference features and perpendicular to it.  PDF space has y
+        increasing downward, so the perpendicular is taken as ``(dy, -dx)`` to
+        keep a conventional plan handedness; with a single reference feature
+        this reduces to plain east and north.
+    """
+    origin_x, origin_y, along_x, along_y, scale, warnings = floor_frame(floor)
+    local_x = x - origin_x
+    local_y = y - origin_y
+    along = (local_x * along_x + local_y * along_y) * scale
+    across = (local_x * along_y - local_y * along_x) * scale
+    return along, across, warnings
+
+
+def alignment_span_m(floor: Floor) -> float | None:
+    """Real distance between a floor's two reference features, if it has two."""
+    if not floor.is_oriented or floor.calibration is None:
+        return None
+    dx = floor.alignment2[0] - floor.alignment[0]
+    dy = floor.alignment2[1] - floor.alignment[1]
+    return math.hypot(dx, dy) * floor.calibration.metres_per_unit
 
 
 def target_height(source_floor: Floor, target_floor: Floor, poi: PointOfInterest) -> tuple[float, str]:
@@ -513,6 +562,32 @@ def check_project(project: Project) -> list[str]:
                 "points span more than one floor but these floors have no alignment point: "
                 + ", ".join(unaligned)
             )
+        unoriented = [
+            f.name for f in project.floors if f.alignment is not None and f.alignment2 is None
+        ]
+        if unoriented:
+            problems.append(
+                "these floors have only one alignment point, which cannot fix how the drawing "
+                "is turned: " + ", ".join(unoriented)
+            )
+
+        # Both features are the same two physical things, so every floor must
+        # agree on how far apart they are. Disagreement means a bad scale or a
+        # misplaced feature, and would quietly skew cross-floor geometry.
+        spans = {
+            f.name: alignment_span_m(f)
+            for f in project.floors
+            if alignment_span_m(f) is not None
+        }
+        if len(spans) > 1:
+            shortest, longest = min(spans.values()), max(spans.values())
+            if shortest > 0 and (longest - shortest) / shortest > 0.02:
+                detail = ", ".join(f"{name} {span:.2f} m" for name, span in spans.items())
+                problems.append(
+                    "floors disagree on the distance between their two alignment points "
+                    f"({detail}); check the scales and that the same two features were "
+                    "marked on each"
+                )
     for poi in project.pois:
         if not poi.linked_source_ids:
             problems.append(f"point {poi.label or poi.id!r} has no linked sources")

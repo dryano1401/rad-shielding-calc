@@ -153,15 +153,47 @@ function floorImage(floorId) {
 // world position their alignment points define. Each drawing has its own
 // origin and may be plotted at its own scale, so a raw coordinate from one
 // sheet means nothing on another until it has been through this.
-function floorTransform(from, to) {
-  if (!from.metres_per_unit || !to.metres_per_unit || !from.alignment || !to.alignment) {
-    return null;   // not registered to each other yet, so nothing can be placed
+// The frame a floor's reference features define: origin, a unit vector along
+// the line joining them, and metres per PDF unit. Two features carry the
+// drawing's rotation; one leaves it assumed square to the page.
+function frameOf(floor) {
+  if (!floor?.metres_per_unit || !floor.alignment) return null;
+  const [ox, oy] = floor.alignment;
+  if (!floor.alignment2) {
+    return { ox, oy, ax: 1, ay: 0, scale: floor.metres_per_unit };
   }
-  const factor = from.metres_per_unit / to.metres_per_unit;
-  return (x, y) => ({
-    x: to.alignment[0] + (x - from.alignment[0]) * factor,
-    y: to.alignment[1] + (y - from.alignment[1]) * factor,
-  });
+  const dx = floor.alignment2[0] - ox;
+  const dy = floor.alignment2[1] - oy;
+  const span = Math.hypot(dx, dy);
+  if (span < 1e-9) return { ox, oy, ax: 1, ay: 0, scale: floor.metres_per_unit };
+  return { ox, oy, ax: dx / span, ay: dy / span, scale: floor.metres_per_unit };
+}
+
+// Map a point from one floor's PDF space into another's, through the shared
+// real-world frame their reference features define. This is a similarity
+// transform -- translation, rotation and uniform scale -- which is the right
+// model for architectural drawings: they are never sheared, and never scaled
+// differently along the two axes. One reference feature per floor gives only
+// the translation, so sheets laid out at different orientations will not line
+// up until a second is marked.
+function floorTransform(from, to) {
+  const a = frameOf(from);
+  const b = frameOf(to);
+  if (!a || !b) return null;
+  return (x, y) => {
+    // Into real metres in the shared frame.
+    const lx = x - a.ox;
+    const ly = y - a.oy;
+    const along = (lx * a.ax + ly * a.ay) * a.scale;
+    const across = (lx * a.ay - ly * a.ax) * a.scale;
+    // Back out into the target drawing's PDF space.
+    const u = along / b.scale;
+    const v = across / b.scale;
+    return {
+      x: b.ox + u * b.ax + v * b.ay,
+      y: b.oy + u * b.ay - v * b.ax,
+    };
+  };
 }
 
 function pointsOnFloor(floorId) {
@@ -333,18 +365,32 @@ function drawCalibration(floor) {
     marker(a.x, a.y, '#4da3ff');
     marker(b.x, b.y, '#4da3ff');
   }
-  if (floor.alignment) {
-    const p = toScreen(floor.alignment[0], floor.alignment[1]);
+  const marks = [floor.alignment, floor.alignment2].filter(Boolean);
+  if (marks.length) {
     ctx.save();
     ctx.strokeStyle = '#c78bff';
     ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(p.x - 9, p.y); ctx.lineTo(p.x + 9, p.y);
-    ctx.moveTo(p.x, p.y - 9); ctx.lineTo(p.x, p.y + 9);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
-    ctx.stroke();
+    if (marks.length === 2) {
+      // The line between them is the axis the registration is built on.
+      const a = toScreen(marks[0][0], marks[0][1]);
+      const b = toScreen(marks[1][0], marks[1][1]);
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    marks.forEach((mark, index) => {
+      const p = toScreen(mark[0], mark[1]);
+      ctx.beginPath();
+      ctx.moveTo(p.x - 9, p.y); ctx.lineTo(p.x + 9, p.y);
+      ctx.moveTo(p.x, p.y - 9); ctx.lineTo(p.x, p.y + 9);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+      ctx.stroke();
+      label(p.x + 11, p.y - 6, `ref ${index + 1}`, '#c78bff', 1);
+    });
     ctx.restore();
   }
 }
@@ -632,8 +678,18 @@ canvas.addEventListener('click', async event => {
   }
 
   if (state.tool === 'align') {
-    setProject(await send(`/api/floors/${floor.id}`, 'PATCH', { alignment: [pdf.x, pdf.y] }));
-    setTool('select');
+    // First click sets the reference feature, second fixes the rotation.
+    const patch = floor.alignment && !floor.alignment2
+      ? { alignment2: [pdf.x, pdf.y] }
+      : { alignment: [pdf.x, pdf.y], alignment2: null };
+    setProject(await send(`/api/floors/${floor.id}`, 'PATCH', patch));
+    const updated = currentFloor();
+    if (updated.alignment && !updated.alignment2) {
+      setStatus('First reference feature set. Click a second one to fix the rotation.');
+    } else {
+      setStatus(`${updated.name} registered by two features.`);
+      setTool('select');
+    }
     return;
   }
 
@@ -689,7 +745,7 @@ function setTool(tool) {
   const help = {
     select: 'Drag a point to move it. Drag the drawing to pan, scroll to zoom.',
     calibrate: 'Click two points a known distance apart on this drawing.',
-    align: 'Click a feature that appears on every floor (a column, stair core, lift shaft).',
+    align: 'Click two features that appear on every floor (columns, stair core, lift shaft). Two are needed to fix rotation as well as position.',
     measure: 'Click two points to measure the distance between them, e.g. a wall standoff.',
     wall: 'Click each end of the wall. It uses the material, thickness and height set on the left.',
     source: 'Click to place a radiation source.',
@@ -866,8 +922,12 @@ function renderFloors() {
         <label>Elevation (m)<input type="number" step="0.1" value="${floor.elevation_m}" data-act="elevation"></label>
       </div>
       <div class="meta ${floor.metres_per_unit ? '' : 'bad'}">Scale: ${escapeHtml(floor.scale_description)}</div>
-      <div class="meta ${floor.alignment ? '' : 'bad'}">Alignment: ${
-        floor.alignment ? 'set' : 'not set — needed for cross-floor distances'}</div>`;
+      <div class="meta ${floor.alignment_state === 'oriented' ? '' : 'bad'}">Alignment: ${
+        floor.alignment_state === 'oriented'
+          ? `2 features, ${formatLength(floor.alignment_span_m)} apart`
+          : floor.alignment_state === 'positioned'
+            ? '1 feature — add a second to fix rotation'
+            : 'not set — needed for cross-floor distances'}</div>`;
 
     div.querySelector('[data-act=view]').onclick = () => {
       state.floorId = floor.id;
@@ -1475,12 +1535,17 @@ document.getElementById('ghost').onchange = event => {
   state.ghost = event.target.checked;
   if (state.ghost) {
     const floor = currentFloor();
-    const unplaceable = state.project.floors
-      .filter(f => f.id !== floor?.id && floorTransform(f, floor) === null)
-      .map(f => f.name);
+    const others = state.project.floors.filter(f => f.id !== floor?.id);
+    const unplaceable = others.filter(f => floorTransform(f, floor) === null).map(f => f.name);
+    const unoriented = others
+      .filter(f => f.alignment && !f.alignment2)
+      .map(f => f.name)
+      .concat(floor?.alignment && !floor?.alignment2 ? [floor.name] : []);
     setStatus(unplaceable.length
-      ? `Cannot place ${unplaceable.join(', ')} on this view — each floor needs a scale and an alignment point.`
-      : 'Other floors shown at their true position, through the alignment points.');
+      ? `Cannot place ${unplaceable.join(', ')} — each floor needs a scale and an alignment point.`
+      : unoriented.length
+        ? `${unoriented.join(', ')} have only one alignment point, so rotation is not corrected. Add a second feature to each.`
+        : 'Other floors shown at their true position, corrected for origin, rotation and scale.');
   }
   draw();
 };

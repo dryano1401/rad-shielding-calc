@@ -22,7 +22,7 @@ This repository currently contains the calculation core.
 | 7. NCRP 147 CT, DLP and chart methods | **complete** |
 | 8. Formatted report export | not started |
 
-244 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+261 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
 
 ## Install and run
 
@@ -43,12 +43,15 @@ needed for the GUI.
    or type the drawing scale directly — `1:50`, `1/4" = 1'` and `1 cm = 1 m`
    all work, written paper:real. Each floor is calibrated independently, so
    drawings may be at different scales.
-3. **Set an alignment point.** Click the same physical feature — a column, stair
-   core, lift shaft — on every floor. Each PDF has its own arbitrary origin, so
-   without this, horizontal distances *between* floors are meaningless. The app
-   warns when it is missing. Once set, *Show other floors* draws the other
-   storeys' points at their true position on the current view, correcting for
-   both origin and scale.
+3. **Register the drawings.** With the *Alignment point* tool, click the same
+   **two** physical features — columns, a stair core, a lift shaft — on every
+   floor. Each PDF has its own arbitrary origin and sheets are often laid out
+   at different orientations, so without this, horizontal distances *between*
+   floors are meaningless. Two features fix position, rotation and relative
+   scale; one fixes position only, and the app says so. Every floor must agree
+   on how far apart the two features are, and a disagreement is reported.
+   Once registered, *Show other floors* draws the other storeys' points at
+   their true position on the current view.
 4. **Measure anything.** The *Measure* tool reports the distance between any two
    clicked points — a wall standoff, a room width — with a live readout as you
    drag out the second point. Naming a measurement keeps it on the drawing and in

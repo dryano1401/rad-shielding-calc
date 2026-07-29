@@ -159,7 +159,7 @@ def test_full_workflow_produces_results_and_csv(client):
 
     for floor_id in (lower, upper):
         calibrate(client, floor_id)
-        client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+        client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
 
     project = client.post("/api/sources", json={
         "floor_id": lower, "x": 0, "y": 0, "label": "Uptake room",
@@ -329,7 +329,7 @@ def two_floor_setup(client):
     lower, upper = project["floors"][0]["id"], project["floors"][1]["id"]
     for floor_id in (lower, upper):
         calibrate(client, floor_id)
-        client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+        client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
     project = client.post("/api/sources", json={
         "floor_id": lower, "x": 0, "y": 0, "label": "Uptake room",
         "method": "tg108", "height_above_floor_m": 1.0,
@@ -433,7 +433,7 @@ def wall_scenario(client):
     project = add_floor(client, "Level 1", 0.0)
     floor_id = project["floors"][0]["id"]
     calibrate(client, floor_id, metres_per_unit=0.1)
-    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
     project = client.post("/api/sources", json={
         "floor_id": floor_id, "x": -40, "y": 0, "label": "Uptake room",
         "method": "tg108", "height_above_floor_m": 1.0,
@@ -538,7 +538,7 @@ def test_obliquity_toggle_changes_the_result(client):
     project = add_floor(client, "Level 1", 0.0)
     floor_id = project["floors"][0]["id"]
     calibrate(client, floor_id, metres_per_unit=0.1)
-    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
     project = client.post("/api/sources", json={
         "floor_id": floor_id, "x": -10, "y": -10, "height_above_floor_m": 1.0,
         "params": {"kind": "uptake", "nuclide": "F-18",
@@ -624,7 +624,7 @@ def chart_scenario(client, per="procedure"):
     project = add_floor(client, "Level 1", 0.0)
     floor_id = project["floors"][0]["id"]
     calibrate(client, floor_id, metres_per_unit=0.1)
-    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
 
     project = client.post("/api/scatter-maps", json={
         "name": "Vendor plan", "plane": "plan", "coordinate_unit": "in",
@@ -756,7 +756,7 @@ def mix_scenario(client, components):
     project = add_floor(client, "Level 1", 0.0)
     floor_id = project["floors"][0]["id"]
     calibrate(client, floor_id, metres_per_unit=0.1)
-    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
     project = client.post("/api/sources", json={
         "floor_id": floor_id, "x": 0, "y": 0, "label": "Uptake room",
         "method": "tg108", "height_above_floor_m": 1.0,

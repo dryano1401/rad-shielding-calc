@@ -284,9 +284,15 @@ class Floor:
         elevation_m: Height of this floor's slab above the project datum.
         calibration: Scale for this drawing; None until calibrated.
         alignment: PDF-space point marking a physical feature common to every
-            floor (a column, stair core, lift shaft).  Cross-floor horizontal
-            distances are measured relative to it.  None means the drawings
+            floor (a column, stair core, lift shaft).  None means the drawings
             are assumed already co-registered, which is reported as a warning.
+        alignment2: A second such feature.  One point fixes only where a
+            drawing sits; it cannot tell how the drawing is turned, so sheets
+            laid out at different orientations will not line up from one point
+            alone.  Two points give the rotation and the relative scale as
+            well, which is a complete registration for architectural drawings:
+            they are never sheared and never scaled differently along the two
+            axes.
         page_width: Page width in PDF units, cached for the viewer.
         page_height: Page height in PDF units.
     """
@@ -298,6 +304,7 @@ class Floor:
     elevation_m: float = 0.0
     calibration: Calibration | None = None
     alignment: tuple[float, float] | None = None
+    alignment2: tuple[float, float] | None = None
     page_width: float = 0.0
     page_height: float = 0.0
     measurements: list[Measurement] = field(default_factory=list)
@@ -307,6 +314,11 @@ class Floor:
     def is_calibrated(self) -> bool:
         """True when a usable scale has been established."""
         return self.calibration is not None
+
+    @property
+    def is_oriented(self) -> bool:
+        """True when two reference features fix the drawing's rotation."""
+        return self.alignment is not None and self.alignment2 is not None
 
 
 @dataclass
@@ -500,6 +512,7 @@ class Project:
                 else None
             )
             alignment = raw.get("alignment")
+            alignment2 = raw.get("alignment2")
             measurements = [
                 Measurement(
                     id=m["id"],
@@ -531,6 +544,7 @@ class Project:
                     elevation_m=raw.get("elevation_m", 0.0),
                     calibration=calibration,
                     alignment=tuple(alignment) if alignment else None,
+                    alignment2=tuple(alignment2) if alignment2 else None,
                     page_width=raw.get("page_width", 0.0),
                     page_height=raw.get("page_height", 0.0),
                     measurements=measurements,
