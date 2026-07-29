@@ -414,11 +414,18 @@ def path_barriers(
 
 @dataclass
 class ChartDirection:
-    """Where a point lies relative to a source's scatter chart."""
+    """Where a point lies relative to a source's scatter chart.
+
+    ``x_m`` and ``y_m`` are the point's position in the chart's own axes,
+    which is what allows the chart to be read directly rather than projected
+    along a bearing.
+    """
 
     bearing_deg: float
     distance_m: float
     plane: str
+    x_m: float = 0.0
+    y_m: float = 0.0
     note: str = ""
 
 
@@ -469,19 +476,24 @@ def chart_direction(
     if plane == "elevation":
         # The elevation chart runs along the table axis, which is the plan
         # chart's +y, so that component becomes the chart's horizontal axis.
-        along = local_y
-        bearing = math.degrees(math.atan2(rise, along))
+        chart_x, chart_y = local_y, rise
         note = (
-            f"elevation chart: {along:+.2f} m along the table axis, {rise:+.2f} m in height"
+            f"elevation chart: {chart_x:+.2f} m along the table axis, "
+            f"{chart_y:+.2f} m in height"
         )
     else:
-        bearing = math.degrees(math.atan2(local_y, local_x))
-        note = f"plan chart: {local_x:+.2f}, {local_y:+.2f} m from the isocentre"
+        chart_x, chart_y = local_x, local_y
+        note = f"plan chart: {chart_x:+.2f}, {chart_y:+.2f} m from the isocentre"
         if abs(rise) > 0.5:
-            note += f", {rise:+.2f} m in height (plan chart used for the bearing)"
+            note += f", {rise:+.2f} m in height"
 
     return ChartDirection(
-        bearing_deg=bearing, distance_m=distance, plane=plane, note=note
+        bearing_deg=math.degrees(math.atan2(chart_y, chart_x)),
+        distance_m=distance,
+        plane=plane,
+        x_m=chart_x,
+        y_m=chart_y,
+        note=note,
     )
 
 

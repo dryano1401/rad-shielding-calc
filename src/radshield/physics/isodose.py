@@ -4,34 +4,35 @@ Vendors publish scatter as a grid of air kerma values on a plane through the
 isocentre -- a plan view looking down, and an elevation view looking from the
 side.  This module turns such a grid into a value at an arbitrary point.
 
-The method mirrors what a physicist does by hand with the printed chart: find
-the direction from isocentre to the point of interest, read the chart value in
-that direction, then correct from the chart's distance to the real distance by
-inverse square.
+The chart is a map of the room laid over the plan with its origin on the
+isocentre.  So the primary operation is simply to **read it where the point
+of interest sits** -- the published value at that spot already accounts for
+both the direction and the distance, and scaling it again by inverse square
+would count the distance twice.
 
-Doing that numerically means normalising each cell to a direction-dependent
-quantity that is distance-independent:
+Reading inside the chart is a bilinear interpolation between the four
+surrounding cells, falling back to the nearest cell where the chart is masked
+(the gantry footprint, the pedestal) and no complete set of four exists.
 
-    S = K * r^2         [mGy m^2 per procedure]
+Inverse square is used **only** where the chart genuinely does not reach: a
+point beyond the printed grid, or a point on another storey with no elevation
+chart available.  For those, each cell is normalised to
 
-``S`` is effectively the scatter source strength on that bearing, and on real
-charts it is impressively constant: along the table axis of the chart used to
-develop this, ``S`` holds to within 2% from 0.5 m out to 2.5 m.  So for a
-query bearing, ``S`` is read off the chart and
+    S = K * r^2         [mGy m^2 per unit of workload]
 
-    K = S / d^2
+the scatter strength on that bearing, which is independent of distance, and
+the value follows as ``K = S / d^2``.  On real charts ``S`` is impressively
+steady: along the table axis of the chart used to develop this it holds to
+within 5% from 0.5 m out to 2.5 m, which is what makes the extrapolation
+trustworthy where it is needed.
 
-gives the value at the true distance ``d``.
-
-Where several cells share a bearing, the **largest** ``S`` is used rather than
-the one nearest in radius.  Charts contain shadowed cells -- the pedestal
-column on a typical plan view reads an order of magnitude below its
-neighbours -- and picking by radius makes the answer jump by that order of
-magnitude as the point of interest moves a little further out, in the
-unsafe direction.  A wall is wide and such shadows are narrow, so the
-unshadowed envelope is both the conservative choice and the one a physicist
-reading the printed chart would make.  When the cells on a bearing disagree
-substantially, that is reported rather than hidden.
+When extrapolating, the **largest** ``S`` on the bearing is used rather than
+the nearest in radius.  Charts contain shadowed cells -- the pedestal column
+reads an order of magnitude below its neighbours -- and picking by radius
+makes the answer jump by that order of magnitude as the point moves a little
+further out, in the unsafe direction.  A wall is wide and such shadows are
+narrow, so the unshadowed envelope is both conservative and what a physicist
+reading the printed chart would take.
 """
 
 from __future__ import annotations
@@ -53,6 +54,32 @@ COORDINATE_UNITS: dict[str, float] = {
 
 # Cell value units, in milligray.
 VALUE_UNITS: dict[str, float] = {"mGy": 1.0, "uGy": 1e-3, "Gy": 1000.0}
+
+# What a chart value is quoted per, and how a weekly total is formed from it.
+# Charts published per mAs or per 100 mAs are scaled by the weekly workload
+# instead of a procedure count.
+WORKLOAD_BASIS: dict[str, str] = {
+    "procedure": "procedures per week",
+    "scan": "scans per week",
+    "mAs": "mAs per week",
+    "100 mAs": "mAs per week / 100",
+}
+
+
+def weekly_multiplier(per: str, procedures_per_week: float, mas_per_week: float) -> float:
+    """How many chart-units of workload occur in a week.
+
+    A chart quoted per procedure is multiplied by the procedure count; one
+    quoted per mAs is multiplied by the weekly workload, and per 100 mAs by a
+    hundredth of it.
+    """
+    if per not in WORKLOAD_BASIS:
+        raise IsodoseError(f"unknown chart basis {per!r}; known: {sorted(WORKLOAD_BASIS)}")
+    if per == "mAs":
+        return mas_per_week
+    if per == "100 mAs":
+        return mas_per_week / 100.0
+    return procedures_per_week
 
 # Bearings further than this from any cell are reported rather than guessed.
 DEFAULT_ANGLE_TOLERANCE_DEG = 30.0
@@ -111,6 +138,9 @@ class ScatterMap:
     cells: list[Cell] = field(default_factory=list)
     per: str = "procedure"
     source: str = ""
+    xs: list[float] = field(default_factory=list)
+    ys: list[float] = field(default_factory=list)
+    grid: dict[tuple[int, int], float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         usable = [c for c in self.cells if c.radius_m >= MIN_RADIUS_M and c.value_mGy > 0]
@@ -127,6 +157,16 @@ class ScatterMap:
         radii = [c.radius_m for c in self.cells]
         return min(radii), max(radii)
 
+    @property
+    def extent(self) -> tuple[float, float, float, float]:
+        """``(min_x, max_x, min_y, max_y)`` of the printed grid, in metres."""
+        return min(self.xs), max(self.xs), min(self.ys), max(self.ys)
+
+    def covers(self, x_m: float, y_m: float) -> bool:
+        """True when a position falls inside the printed grid."""
+        min_x, max_x, min_y, max_y = self.extent
+        return min_x <= x_m <= max_x and min_y <= y_m <= max_y
+
 
 @dataclass(frozen=True)
 class Sample:
@@ -134,21 +174,42 @@ class Sample:
 
     value_mGy: float
     distance_m: float
-    cell: Cell
-    bearing_deg: float
-    angle_error_deg: float
-    extrapolation_ratio: float
+    method: str = "read"
+    x_m: float = 0.0
+    y_m: float = 0.0
+    cell: Cell | None = None
+    bearing_deg: float = 0.0
+    angle_error_deg: float = 0.0
+    extrapolation_ratio: float = 1.0
     strength: float = 0.0
     cells_considered: int = 1
     notes: tuple[str, ...] = ()
 
+    @property
+    def is_extrapolated(self) -> bool:
+        """True when inverse square was used because the chart did not reach."""
+        return self.method == "extrapolated"
+
     def describe(self) -> str:
         """One line explaining the read, for the audit trail."""
+        position = f"({self.x_m:+.2f}, {self.y_m:+.2f}) m from the isocentre"
+        if self.method == "interpolated":
+            return (
+                f"chart read at {position} by interpolation between the surrounding "
+                f"cells: {self.value_mGy:.4g} mGy"
+            )
+        if self.method == "nearest":
+            assert self.cell is not None
+            return (
+                f"chart read at {position} from the nearest cell "
+                f"({self.cell.x_m:+.2f}, {self.cell.y_m:+.2f}) m, "
+                f"{self.cell.value_mGy:g} mGy"
+            )
+        assert self.cell is not None
         return (
-            f"chart cell at ({self.cell.x_m:.2f}, {self.cell.y_m:.2f}) m, "
-            f"r = {self.cell.radius_m:.2f} m, {self.cell.value_mGy:g} mGy, "
-            f"bearing {self.cell.bearing_deg:.0f} deg vs requested "
-            f"{self.bearing_deg:.0f} deg; scaled by "
+            f"{position} lies beyond the chart, so the cell at "
+            f"({self.cell.x_m:+.2f}, {self.cell.y_m:+.2f}) m on the same bearing "
+            f"({self.cell.value_mGy:g} mGy at r = {self.cell.radius_m:.2f} m) was scaled by "
             f"({self.cell.radius_m:.2f}/{self.distance_m:.2f})^2 to {self.value_mGy:.4g} mGy"
         )
 
@@ -194,6 +255,7 @@ def build_map(
     value_scale = VALUE_UNITS[value_unit]
 
     cells: list[Cell] = []
+    grid: dict[tuple[int, int], float] = {}
     for row_index, row in enumerate(values):
         if len(row) != len(x_coords):
             raise IsodoseError(
@@ -209,30 +271,146 @@ def build_map(
                     value_mGy=float(value) * value_scale,
                 )
             )
-    return ScatterMap(name=name, plane=plane, cells=cells, per=per, source=source)
+            grid[(column_index, row_index)] = float(value) * value_scale
+
+    return ScatterMap(
+        name=name,
+        plane=plane,
+        cells=cells,
+        per=per,
+        source=source,
+        xs=[c * length_scale for c in x_coords],
+        ys=[c * length_scale for c in y_coords],
+        grid=grid,
+    )
 
 
-def sample(
+def sample_at(
+    scatter_map: ScatterMap,
+    x_m: float,
+    y_m: float,
+    *,
+    angle_tolerance_deg: float = DEFAULT_ANGLE_TOLERANCE_DEG,
+) -> Sample:
+    """Read the chart at a position expressed in the chart's own axes.
+
+    Inside the printed grid the chart value is returned as published, with no
+    distance correction: the chart already accounts for the distance to that
+    spot, and scaling it again would count the distance twice.  Beyond the
+    grid, the value is extrapolated along the bearing by inverse square.
+
+    Args:
+        x_m: Offset from the isocentre along the chart's x axis.
+        y_m: Offset along the chart's y axis.
+
+    Returns:
+        A :class:`Sample` recording the value and how it was obtained.
+    """
+    distance = math.hypot(x_m, y_m)
+    if distance <= 0:
+        raise IsodoseError("cannot read a scatter chart at the isocentre itself")
+
+    if scatter_map.covers(x_m, y_m):
+        interpolated = _interpolate(scatter_map, x_m, y_m)
+        if interpolated is not None:
+            return Sample(
+                value_mGy=interpolated,
+                distance_m=distance,
+                method="interpolated",
+                x_m=x_m,
+                y_m=y_m,
+                bearing_deg=math.degrees(math.atan2(y_m, x_m)),
+            )
+        nearest = min(
+            scatter_map.cells,
+            key=lambda c: (c.x_m - x_m) ** 2 + (c.y_m - y_m) ** 2,
+        )
+        return Sample(
+            value_mGy=nearest.value_mGy,
+            distance_m=distance,
+            method="nearest",
+            x_m=x_m,
+            y_m=y_m,
+            cell=nearest,
+            bearing_deg=math.degrees(math.atan2(y_m, x_m)),
+            notes=(
+                "the chart is masked around this position, so the nearest printed cell "
+                "was used without interpolation",
+            ),
+        )
+
+    reading = extrapolate(
+        scatter_map,
+        math.degrees(math.atan2(y_m, x_m)),
+        distance,
+        angle_tolerance_deg=angle_tolerance_deg,
+    )
+    return Sample(
+        value_mGy=reading.value_mGy,
+        distance_m=distance,
+        method="extrapolated",
+        x_m=x_m,
+        y_m=y_m,
+        cell=reading.cell,
+        bearing_deg=reading.bearing_deg,
+        angle_error_deg=reading.angle_error_deg,
+        extrapolation_ratio=reading.extrapolation_ratio,
+        strength=reading.strength,
+        cells_considered=reading.cells_considered,
+        notes=reading.notes,
+    )
+
+
+def _interpolate(scatter_map: ScatterMap, x_m: float, y_m: float) -> float | None:
+    """Bilinear value at a position, or None where the four cells are not all printed."""
+    xs, ys = scatter_map.xs, scatter_map.ys
+    if len(xs) < 2 or len(ys) < 2:
+        return None
+
+    def bracket(values: list[float], target: float) -> tuple[int, int, float] | None:
+        ordered = sorted(range(len(values)), key=lambda i: values[i])
+        for low, high in zip(ordered, ordered[1:]):
+            if values[low] <= target <= values[high]:
+                span = values[high] - values[low]
+                fraction = 0.0 if span == 0 else (target - values[low]) / span
+                return low, high, fraction
+        return None
+
+    column = bracket(xs, x_m)
+    row = bracket(ys, y_m)
+    if column is None or row is None:
+        return None
+
+    left, right, fx = column
+    bottom, top, fy = row
+    try:
+        corners = (
+            scatter_map.grid[(left, bottom)],
+            scatter_map.grid[(right, bottom)],
+            scatter_map.grid[(left, top)],
+            scatter_map.grid[(right, top)],
+        )
+    except KeyError:
+        return None
+
+    lower = corners[0] * (1 - fx) + corners[1] * fx
+    upper = corners[2] * (1 - fx) + corners[3] * fx
+    return lower * (1 - fy) + upper * fy
+
+
+def extrapolate(
     scatter_map: ScatterMap,
     bearing_deg: float,
     distance_m: float,
     *,
     angle_tolerance_deg: float = DEFAULT_ANGLE_TOLERANCE_DEG,
 ) -> Sample:
-    """Read the map on a bearing and scale it to a distance.
+    """Project the chart out to a distance it does not cover, along a bearing.
 
-    Cells are matched on bearing, and the strongest of them sets the value --
-    see the module docstring for why the envelope is preferred to the cell
-    nearest in radius.
-
-    Args:
-        bearing_deg: Direction to the point, degrees from the map's +x axis.
-        distance_m: True distance from the isocentre to the point.
-        angle_tolerance_deg: How far off bearing a cell may be before the
-            result is flagged as poorly matched.
-
-    Returns:
-        A :class:`Sample` carrying the value and how it was obtained.
+    Used where the chart genuinely cannot answer: a point past the edge of the
+    printed grid, or on another storey with no elevation chart.  The strongest
+    cell on the bearing sets the scatter strength -- see the module docstring
+    for why the envelope beats the nearest cell.
     """
     if distance_m <= 0:
         raise IsodoseError(f"distance must be positive, got {distance_m}")
@@ -242,8 +420,6 @@ def sample(
         return abs(difference)
 
     best_error = min(angular_error(cell) for cell in scatter_map.cells)
-    # Everything within a degree of the closest bearing lies on the same ray
-    # out of the isocentre and so describes the same direction.
     candidates = [c for c in scatter_map.cells if angular_error(c) <= best_error + 1.0]
     cell = max(candidates, key=lambda c: c.strength)
 
@@ -251,7 +427,7 @@ def sample(
     if best_error > angle_tolerance_deg:
         notes.append(
             f"nearest chart bearing is {best_error:.0f} deg away from the direction to this "
-            f"point; the chart may not cover it"
+            "point; the chart may not cover it"
         )
 
     weakest = min(c.strength for c in candidates)
@@ -263,15 +439,18 @@ def sample(
         )
 
     ratio = distance_m / cell.radius_m
-    if ratio > 3.0 or ratio < 1 / 3.0:
+    if ratio > 3.0:
         notes.append(
-            f"the chart value is being scaled by a factor of {ratio:.1f} in distance; "
-            "check the chart covers this range"
+            f"the chart value is being projected {ratio:.1f} times further out than the "
+            "cell it came from"
         )
 
     return Sample(
         value_mGy=cell.strength / distance_m**2,
         distance_m=distance_m,
+        method="extrapolated",
+        x_m=distance_m * math.cos(math.radians(bearing_deg)),
+        y_m=distance_m * math.sin(math.radians(bearing_deg)),
         cell=cell,
         bearing_deg=bearing_deg,
         angle_error_deg=best_error,

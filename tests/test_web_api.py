@@ -605,3 +605,111 @@ def test_deleting_a_source_clears_its_named_barriers(client):
         source_id: [{"material": "lead", "thickness_mm": 3.0}]}})
     project = client.delete(f"/api/sources/{source_id}").json()
     assert project["pois"][0]["manual_barriers"] == {}
+
+
+# A cut-down vendor plan view covering both the table axis and the bore, so
+# rotating the scanner genuinely changes which part of the chart is read.
+CHART_GRID = (
+    "\t-59.1\t-19.7\t0\t19.7\t59.1\n"
+    "-19.7\t0.001\t0.002\tNA\t0.002\t0.001\n"
+    "0\t0.004\t0.005\tNA\t0.005\t0.004\n"
+    "19.7\t0.018\t0.370\t0.757\t0.381\t0.018\n"
+    "39.4\t0.053\t0.149\t0.195\t0.157\t0.053\n"
+    "59.1\t0.047\t0.076\t0.087\t0.078\t0.047\n"
+)
+
+
+def chart_scenario(client, per="procedure"):
+    """A CT at the isocentre with a chart, and a point 1.5 m due north of it."""
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    calibrate(client, floor_id, metres_per_unit=0.1)
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+
+    project = client.post("/api/scatter-maps", json={
+        "name": "Vendor plan", "plane": "plan", "coordinate_unit": "in",
+        "value_unit": "mGy", "per": per, "source": "vendor", "grid": CHART_GRID,
+    }).json()
+    map_id = project["scatter_maps"][0]["id"]
+
+    params = {"scatter_method": "chart", "plan_map_id": map_id, "kvp": 125,
+              "scatter_source": "vendor"}
+    params.update({"mas_per_week": 5000} if "mAs" in per else {"procedures_per_week": 100})
+    project = client.post("/api/sources", json={
+        "floor_id": floor_id, "x": 0, "y": 0, "label": "CT", "method": "ncrp147_ct",
+        "height_above_floor_m": 1.0, "rotation_deg": 0.0, "params": params,
+    }).json()
+    source_id = project["sources"][0]["id"]
+
+    # 59.1 in north of the isocentre; PDF y grows downward so north is -y.
+    offset = 59.1 * 0.0254 * 10
+    project = client.post("/api/pois", json={
+        "floor_id": floor_id, "x": 0, "y": -offset, "label": "Wall",
+        "occupancy": 1.0, "area_class": "uncontrolled", "auto_height": False,
+        "height_above_floor_m": 1.0, "offset_applied": True,
+        "linked_source_ids": [source_id],
+    }).json()
+    client.post("/api/materials", json={"materials": ["lead"]})
+    return floor_id, source_id, project["pois"][0]["id"], map_id
+
+
+def test_chart_import_and_summary(client):
+    _, _, _, map_id = chart_scenario(client)
+    chart = client.get("/api/project").json()["scatter_maps"][0]
+    assert chart["id"] == map_id
+    assert "plan view" in chart["summary"]
+    assert "23 cells" in chart["summary"]     # 5x5 grid less the two masked cells
+
+
+def test_malformed_chart_is_rejected_on_import(client):
+    add_floor(client, "Level 1", 0.0)
+    assert client.post("/api/scatter-maps", json={"grid": "nonsense"}).status_code == 400
+    assert client.post("/api/scatter-maps", json={"grid": ""}).status_code == 400
+
+
+def test_chart_value_is_used_as_published_on_the_same_floor(client):
+    """The chart reads 0.087 mGy at that spot; no inverse-square correction."""
+    chart_scenario(client)
+    result = client.get("/api/results").json()["results"][0]
+    assert result["methods"][0]["total"] == pytest.approx(0.087 * 100, rel=1e-6)
+    assert any("no inverse-square correction" in n for n in result["contributions"][0]["notes"])
+
+
+def test_rotation_changes_the_dose_through_the_api(client):
+    _, source_id, _, _ = chart_scenario(client)
+    facing = client.get("/api/results").json()["results"][0]["methods"][0]["total"]
+    client.patch(f"/api/sources/{source_id}", json={"rotation_deg": 90})
+    side_on = client.get("/api/results").json()["results"][0]["methods"][0]["total"]
+    # Down the table the chart reads 0.087; out through the bore, 0.004.
+    assert facing == pytest.approx(0.087 * 100, rel=1e-6)
+    assert side_on == pytest.approx(0.004 * 100, rel=1e-6)
+
+
+def test_chart_quoted_per_mas_scales_with_workload(client):
+    """5000 mAs a week against a chart of 0.087 mGy per 100 mAs."""
+    chart_scenario(client, per="100 mAs")
+    result = client.get("/api/results").json()["results"][0]
+    assert result["methods"][0]["total"] == pytest.approx(0.087 * 50, rel=1e-6)
+    assert "chart kerma at the point (mGy per 100 mAs)" in result["contributions"][0]["terms"]
+
+
+def test_charts_survive_save_and_reopen(client, tmp_path):
+    _, source_id, _, _ = chart_scenario(client)
+    client.patch(f"/api/sources/{source_id}", json={"rotation_deg": 42.5})
+    path = tmp_path / "chart.rsproj"
+    client.post("/api/project/save", json={"path": str(path)})
+    client.post("/api/project/new")
+    reopened = client.post("/api/project/load", json={"path": str(path)}).json()
+    assert reopened["scatter_maps"][0]["name"] == "Vendor plan"
+    assert reopened["sources"][0]["rotation_deg"] == 42.5
+    assert client.get("/api/results").json()["results"][0]["methods"][0]["total"] > 0
+
+
+def test_deleting_a_chart_unassigns_it(client):
+    _, source_id, _, map_id = chart_scenario(client)
+    project = client.delete(f"/api/scatter-maps/{map_id}").json()
+    assert project["scatter_maps"] == []
+    assert project["sources"][0]["params"]["plan_map_id"] == ""
+    # The calculation reports the missing chart rather than crashing.
+    result = client.get("/api/results").json()["results"][0]
+    assert any("no chart is assigned" in e for e in result["errors"])

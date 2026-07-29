@@ -22,7 +22,7 @@ This repository currently contains the calculation core.
 | 7. NCRP 147 CT, DLP and chart methods | **complete** |
 | 8. Formatted report export | not started |
 
-209 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+220 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
 
 ## Install and run
 

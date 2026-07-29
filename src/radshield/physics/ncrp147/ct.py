@@ -217,25 +217,37 @@ def evaluate(inputs: CTBarrierInputs, goal: DesignGoal) -> CTBarrierResult:
 def evaluate_from_chart(
     inputs: CTBarrierInputs,
     goal: DesignGoal,
-    kerma_per_procedure_mGy: float,
+    kerma_per_unit_mGy: float,
     chart_notes: tuple[str, ...] = (),
+    *,
+    workload_per_week: float | None = None,
+    basis: str = "procedure",
 ) -> CTBarrierResult:
     """Barrier requirement from a scatter chart already read at the point.
 
-    :mod:`radshield.physics.isodose` handles the direction lookup and the
-    inverse-square correction, because those depend on where the point sits
-    relative to the isocentre.  What arrives here is the per-procedure air
-    kerma *at the point*, so no further distance correction is applied.
+    :mod:`radshield.physics.isodose` locates the point on the chart and, only
+    where the chart does not reach, projects it by inverse square.  What
+    arrives here is the air kerma *at the point* per unit of whatever the
+    chart is quoted in, so no further distance correction is applied.
+
+    Args:
+        kerma_per_unit_mGy: Chart value at the point, per chart unit.
+        workload_per_week: How many chart units occur in a week.  Defaults to
+            the procedure count for charts quoted per procedure.
+        basis: What the chart is quoted per, for the audit trail.
     """
     if goal.quantity != "air_kerma":
         raise ValueError(f"NCRP 147 requires an air-kerma design goal, got {goal.quantity!r}")
-    if kerma_per_procedure_mGy < 0:
+    if kerma_per_unit_mGy < 0:
         raise ValueError("chart kerma cannot be negative")
 
-    kerma = kerma_per_procedure_mGy * inputs.procedures_per_week
+    units = (
+        inputs.procedures_per_week if workload_per_week is None else workload_per_week
+    )
+    kerma = kerma_per_unit_mGy * units
     terms = {
-        "chart kerma at the point (mGy per procedure)": kerma_per_procedure_mGy,
-        "procedures per week": inputs.procedures_per_week,
+        f"chart kerma at the point (mGy per {basis})": kerma_per_unit_mGy,
+        f"{basis}s per week": units,
         "distance d (m)": inputs.distance_m,
         "occupancy T": inputs.occupancy,
         "design goal P (mGy/week)": goal.value,

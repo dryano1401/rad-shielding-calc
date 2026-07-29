@@ -201,42 +201,55 @@ overridden per scanner; the shipped values live in
 
 Vendors publish scatter as a grid of air kerma on a plane through the
 isocentre: a plan view looking down, and an elevation view from the side.
-Read directly, such a chart only gives values at the printed grid points, so
-each cell is first normalised to
+
+**The chart is read where the point is.** It is a map of the room laid over
+the drawing with its origin on the isocentre, so within the printed grid the
+published value is used exactly as it stands. No inverse-square correction is
+applied, because the chart already accounts for the distance to that spot and
+scaling it again would count the distance twice. Reading between cells is a
+bilinear interpolation of the four surrounding values, falling back to the
+nearest printed cell where the chart is masked and no complete set of four
+exists (the gantry footprint, the pedestal).
+
+That the chart wins over any model is not a technicality. Four metres along
+the table axis the chart used to develop this reads 0.002 mGy, because the
+pedestal shadows that spot; a 1/d^2 projection of the same bearing gives about
+0.012, six times higher. Inside the chart, the manufacturer's measurement
+stands.
+
+**Inverse square is only for where the chart does not reach**: a point past
+the edge of the printed grid, or a point on another storey with no elevation
+chart. There, each cell is normalised to
 
     S = K * r^2
 
-the scatter strength on that bearing, which is independent of distance. The
-value at an arbitrary point is then ``K = S / d^2``.
+the scatter strength on that bearing, which is independent of distance, and
+the value follows as ``K = S / d^2``. On real charts ``S`` is steady: along
+the table axis it holds to within 5% from 0.5 m to 2.5 m, and a test pins that
+spread so a mistranscribed chart fails as a physical inconsistency rather than
+passing as a plausible number.
 
-That premise is not assumed, it is checked. On the chart used to develop this,
-along the table axis, ``S`` is 0.1895, 0.1953, 0.1960, 0.1878 and 0.1937
-mGy m^2 at 0.5, 1.0, 1.5, 2.0 and 2.5 m -- constant to within 5% over a
-five-fold change in distance. A test pins that spread, so a mistranscribed
-chart shows up as a physical inconsistency rather than a plausible number.
+When projecting, the largest ``S`` on the bearing is used rather than the
+nearest in radius. Selecting by radius would let a projection inherit the
+pedestal shadow, and the answer would then fall tenfold as the point moved a
+few centimetres further out, in the unsafe direction.
 
-**Geometry.** The placed source point is the isocentre. Each source carries a
-rotation, being the angle its chart's +x axis makes with east, so the chart
-can be turned to match how the equipment sits on the drawing. The bearing from
-isocentre to the protected point is computed in the chart's own frame; the
-distance used for the inverse square is the same one the rest of the
-calculation uses, including the NCRP standoff and any entered override.
-
-**Choosing a cell.** Where several cells share a bearing, the one with the
-largest ``S`` is used, not the one nearest in radius. Charts contain shadowed
-cells -- the pedestal column on a typical plan view reads an order of
-magnitude below its neighbours -- and selecting by radius makes the answer
-fall tenfold as the protected point moves a few centimetres further out, in
-the unsafe direction. A wall is wide and such shadows are narrow, so the
-unshadowed envelope is both conservative and what a physicist reading the
-printed chart would take. Where the cells on a bearing disagree by more than a
-factor of two, that is reported.
+**Geometry.** The placed source point is the isocentre, and each source
+carries a rotation -- the angle its chart's +x axis makes with east -- so the
+chart can be turned to match how the equipment sits on the drawing. Where the
+NCRP standoff or an entered distance override applies, the read position is
+moved outward to match, so a single distance governs throughout rather than
+the chart being read at one place and the arithmetic quoting another.
 
 **Plan against elevation.** A point on another floor is read from the
 elevation chart when one is assigned, since that is the view describing what
-leaves the gantry vertically. Falling back to the plan chart for such a point
-is allowed but noted, because the plan bearing ignores the vertical
-component.
+leaves the gantry vertically. Falling back to the plan chart is allowed but
+noted, because the plan view does not represent the vertical separation.
+
+**Workload basis.** Charts are usually quoted per procedure, but per mAs and
+per 100 mAs occur too. The basis is recorded with the chart and decides what
+the weekly total is formed from: a procedure count, or the weekly workload in
+mAs.
 
 ### Validation status
 

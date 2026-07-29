@@ -174,51 +174,82 @@ def _read_chart(
 ) -> tuple[float, tuple[str, ...]]:
     """Sample the source's scatter chart at a point.
 
-    An elevation chart is preferred when the point is on another floor, since
-    that is the view describing what leaves the gantry vertically. Otherwise
-    the plan chart is used.
+    The chart is laid over the plan with its origin on the isocentre, so where
+    it reaches the point it is simply read there: the published value already
+    accounts for the distance to that spot.  Inverse square is reserved for
+    points the chart does not cover.
 
-    Only the *bearing* comes from the placed geometry.  The distance is passed
-    in, so the inverse-square correction uses the same figure as the rest of
-    the calculation -- including the NCRP standoff and any entered override.
-    Deriving it separately here would let the audit trail quote one distance
-    while the arithmetic used another.
+    An elevation chart is preferred when the point is on another floor, since
+    that is the view describing what leaves the gantry vertically.
+
+    ``distance_m`` is the distance the rest of the calculation is using,
+    including the NCRP standoff and any entered override.  Where it differs
+    from the raw point-to-point distance, the read position is moved outward
+    to match, so one distance governs throughout.
 
     Returns:
-        ``(kerma per procedure at the point in mGy, notes)``.
+        ``(kerma per unit of workload at the point in mGy, notes)``.
     """
     params = source.params
     plan_id = params.get("plan_map_id") or ""
     elevation_id = params.get("elevation_map_id") or ""
 
     cross_floor = source.floor_id != poi.floor_id
-    map_id = elevation_id if (cross_floor and elevation_id) else plan_id
-    plane = "elevation" if map_id == elevation_id and elevation_id else "plan"
+    use_elevation = cross_floor and bool(elevation_id)
+    map_id = elevation_id if use_elevation else plan_id
     if not map_id:
         raise ValueError(
             "this CT source uses the manufacturer chart method but no chart is assigned"
         )
+    plane = "elevation" if use_elevation else "plan"
 
     scatter_map = _scatter_map(project, map_id)
     direction = chart_direction(project, source, poi, plane=plane)
-    reading = isodose.sample(scatter_map, direction.bearing_deg, distance_m)
+
+    # Scale the chart-frame position so its radius matches the distance the
+    # calculation is using; without this a standoff or an override would move
+    # the point but not the place the chart is read.
+    x_m, y_m = direction.x_m, direction.y_m
+    adjusted = abs(distance_m - direction.distance_m) > 1e-9
+    if adjusted and direction.distance_m > 0:
+        stretch = distance_m / direction.distance_m
+        x_m, y_m = x_m * stretch, y_m * stretch
+
+    reading = isodose.sample_at(scatter_map, x_m, y_m)
 
     notes = (
         f"{scatter_map.name} ({plane} view), {direction.note}",
         reading.describe(),
     ) + reading.notes
-    if abs(distance_m - direction.distance_m) > 1e-6:
+    if adjusted:
         notes += (
             f"chart read at {distance_m:.2f} m, the distance used throughout this "
             f"calculation, rather than the {direction.distance_m:.2f} m straight from "
             "the placed points",
         )
+    if not reading.is_extrapolated:
+        notes += (
+            "the chart covers this point, so its published value is used as it stands "
+            "with no inverse-square correction",
+        )
     if cross_floor and not elevation_id:
         notes += (
             "no elevation chart assigned, so the plan chart was used for a point on "
-            "another floor; the bearing ignores the vertical component",
+            "another floor; the vertical separation is not represented",
         )
     return reading.value_mGy, notes
+
+
+def _chart_basis(project: Project, source: SourcePoint) -> str:
+    """What the source's chart quotes its values per."""
+    for key in ("plan_map_id", "elevation_map_id"):
+        map_id = source.params.get(key)
+        if map_id:
+            try:
+                return project.scatter_map(map_id).per
+            except KeyError:
+                continue
+    return "procedure"
 
 
 def _optional_float(value: Any) -> float | None:
@@ -400,7 +431,15 @@ def _solve_ncrp147(
             inputs = _ct_inputs(src, dist.metres, poi.occupancy)
             if inputs.scatter.method == "chart":
                 kerma, chart_notes = _read_chart(project, src, poi, dist.metres)
-                res = ncrp_ct.evaluate_from_chart(inputs, goal, kerma, chart_notes)
+                basis = _chart_basis(project, src)
+                units = isodose.weekly_multiplier(
+                    basis,
+                    float(src.params.get("procedures_per_week", 0.0) or 0.0),
+                    float(src.params.get("mas_per_week", 0.0) or 0.0),
+                )
+                res = ncrp_ct.evaluate_from_chart(
+                    inputs, goal, kerma, chart_notes, workload_per_week=units, basis=basis
+                )
             else:
                 res = ncrp_ct.evaluate(inputs, goal)
             params_for = lambda material, i=inputs: ncrp_ct.barrier_params(i, material)

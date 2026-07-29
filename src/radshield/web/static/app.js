@@ -930,6 +930,13 @@ function renderInspector() {
   else renderPoiInspector(title, box);
 }
 
+// What the chart assigned to a source quotes its values per.
+function chartBasis(params) {
+  const id = params.plan_map_id || params.elevation_map_id;
+  const chart = (state.project.scatter_maps || []).find(m => m.id === id);
+  return chart?.per || 'procedure';
+}
+
 function renderSourceInspector(title, box) {
   const source = state.project.sources.find(s => s.id === state.selection.id);
   if (!source) return select(null);
@@ -1028,7 +1035,10 @@ function renderSourceInspector(title, box) {
            <div class="field">DLP per procedure (mGy·cm)<input type="number" value="${p.dlp_per_procedure_mGy_cm ?? ''}" data-k="dlp_per_procedure_mGy_cm"></div>
            <div class="field">κ override (1/cm)<input type="number" step="0.00001" placeholder="${p.body_region === 'head' ? '9e-5' : '3e-4'}" value="${p.kappa_per_cm ?? ''}" data-k="kappa_per_cm"></div>
            <p class="hint">Leave κ blank to use the NCRP 147 value for the selected region.</p>`}
-      <div class="field">Procedures per week<input type="number" value="${p.procedures_per_week ?? ''}" data-k="procedures_per_week"></div>
+      ${chartBasis(p).includes('mAs')
+        ? `<div class="field">Workload (mAs per week)<input type="number" value="${p.mas_per_week ?? ''}" data-k="mas_per_week"></div>
+           <p class="hint">This chart is quoted per ${escapeHtml(chartBasis(p))}, so it scales with workload rather than a procedure count.</p>`
+        : `<div class="field">Procedures per week<input type="number" value="${p.procedures_per_week ?? ''}" data-k="procedures_per_week"></div>`}
       <div class="field">kVp<input type="number" value="${p.kvp ?? 125}" data-k="kvp"></div>
     `}
     <button data-act="delete" class="wide">Delete source</button>`;

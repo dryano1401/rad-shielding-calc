@@ -126,74 +126,107 @@ def test_kerma_times_radius_squared_is_constant_along_a_bearing():
     assert strengths[0] == pytest.approx(0.757 * (19.7 * IN) ** 2, rel=1e-9)
 
 
-# --- sampling ----------------------------------------------------------------
+# --- reading the chart --------------------------------------------------------
 
-def test_sampling_at_the_strongest_cell_returns_its_chart_value():
-    """At the radius of the governing cell, its published value comes straight back."""
+def test_reading_a_grid_point_returns_its_published_value():
+    """The chart is laid over the plan, so at a printed cell it reads exactly."""
     scatter_map = plan_map()
-    reading = isodose.sample(scatter_map, 90.0, 59.1 * IN)
+    reading = isodose.sample_at(scatter_map, 0.0, 59.1 * IN)
     assert reading.value_mGy == pytest.approx(0.087, rel=1e-9)
-    assert reading.cell.radius_m == pytest.approx(59.1 * IN)
+    assert reading.method == "interpolated"
 
 
-def test_envelope_slightly_over_reads_the_weaker_cells_on_a_bearing():
-    """The cost of taking the envelope, stated rather than hidden.
+def test_no_distance_correction_is_applied_inside_the_chart():
+    """The decisive case: the chart's own value stands, even where it defies 1/d^2.
 
-    At 39.4 in the chart says 0.195 mGy, but the governing cell on that
-    bearing is the one at 59.1 in, so the reading comes back marginally
-    higher. On this chart the difference is under 1%.
+    At 4 m along the table axis the chart reads 0.002 mGy because the pedestal
+    shadows that spot. Projecting the strongest cell on the same bearing by
+    inverse square would give about 0.012 -- six times higher. Inside the
+    chart the published value wins, because the chart already accounts for the
+    distance to that point.
     """
     scatter_map = plan_map()
-    reading = isodose.sample(scatter_map, 90.0, 39.4 * IN)
-    assert reading.value_mGy > 0.195
-    assert reading.value_mGy / 0.195 < 1.01
+    reading = isodose.sample_at(scatter_map, 0.0, 157.5 * IN)
+    assert reading.value_mGy == pytest.approx(0.002, rel=1e-9)
+    assert not reading.is_extrapolated
+
+    projected = isodose.extrapolate(scatter_map, 90.0, 157.5 * IN)
+    assert projected.value_mGy > 5 * reading.value_mGy
 
 
-def test_inverse_square_scaling_between_chart_points():
+def test_interpolation_between_printed_cells():
+    """Halfway between two cells on a row, the value is halfway between them."""
     scatter_map = plan_map()
-    near = isodose.sample(scatter_map, 90.0, 2.0)
-    far = isodose.sample(scatter_map, 90.0, 4.0)
+    midpoint = (19.7 + 39.4) / 2 * IN
+    reading = isodose.sample_at(scatter_map, 0.0, midpoint)
+    assert reading.method == "interpolated"
+    assert reading.value_mGy == pytest.approx((0.757 + 0.195) / 2, rel=1e-9)
+
+
+def test_masked_area_falls_back_to_the_nearest_cell():
+    """Inside the gantry footprint there are no four corners to interpolate."""
+    scatter_map = plan_map()
+    reading = isodose.sample_at(scatter_map, 0.0, -39.4 * IN)
+    assert reading.method == "nearest"
+    assert any("masked" in note for note in reading.notes)
+
+
+def test_beyond_the_chart_the_value_is_projected_by_inverse_square():
+    scatter_map = plan_map()
+    inside = isodose.sample_at(scatter_map, 0.0, 59.1 * IN)
+    outside = isodose.sample_at(scatter_map, 0.0, 8.0)
+    assert not inside.is_extrapolated
+    assert outside.is_extrapolated
+    # 1/d^2 from the strongest cell on the bearing.
+    assert outside.value_mGy == pytest.approx(outside.strength / 64.0, rel=1e-9)
+    assert "beyond the chart" in outside.describe()
+
+
+def test_projection_falls_as_inverse_square_once_off_the_chart():
+    scatter_map = plan_map()
+    near = isodose.sample_at(scatter_map, 0.0, 6.0)
+    far = isodose.sample_at(scatter_map, 0.0, 12.0)
     assert far.value_mGy == pytest.approx(near.value_mGy / 4.0, rel=1e-9)
 
 
-def test_distance_sweep_is_smooth_despite_the_pedestal_shadow():
-    """The pedestal column reads ~10x low; the value must not jump as d crosses it.
-
-    Selecting the cell nearest in radius would hand back the shadowed 0.002
-    value beyond 3 m, dropping the answer tenfold for a few centimetres of
-    extra distance, and in the unsafe direction.
-    """
+def test_projection_uses_the_envelope_not_the_shadowed_cell():
+    """Off-chart projection must not inherit the pedestal shadow."""
     scatter_map = plan_map()
-    values = [isodose.sample(scatter_map, 90.0, d).value_mGy
-              for d in (2.4, 2.6, 3.0, 3.4, 3.6, 4.0)]
-    for previous, current in zip(values, values[1:]):
-        assert current < previous                       # falls monotonically
-        assert previous / current < 1.6                 # no cliff
-
-
-def test_shadowed_bearing_is_reported():
-    scatter_map = plan_map()
-    reading = isodose.sample(scatter_map, 90.0, 3.0)
+    reading = isodose.extrapolate(scatter_map, 90.0, 8.0)
     assert any("disagree by a factor" in note for note in reading.notes)
+    assert reading.strength == pytest.approx(0.087 * (59.1 * IN) ** 2, rel=1e-9)
 
 
 def test_bearing_selects_the_right_side_of_the_chart():
     """Scatter is far stronger down the table than out through the gantry bore."""
     scatter_map = plan_map()
-    down_table = isodose.sample(scatter_map, 90.0, 4.0).value_mGy
-    through_bore = isodose.sample(scatter_map, 0.0, 4.0).value_mGy
-    assert down_table > 10 * through_bore
+    down_table = isodose.sample_at(scatter_map, 0.0, 59.1 * IN).value_mGy
+    through_bore = isodose.sample_at(scatter_map, 59.1 * IN, 0.0).value_mGy
+    assert down_table > 40 * through_bore
 
 
-def test_large_extrapolation_and_off_bearing_reads_are_flagged():
+def test_far_projection_is_flagged():
     scatter_map = plan_map()
-    assert any("scaled by a factor" in n for n in isodose.sample(scatter_map, 90.0, 30.0).notes)
-    assert isodose.sample(scatter_map, 90.0, 4.0).angle_error_deg == pytest.approx(0.0)
+    assert any("projected" in n for n in isodose.sample_at(scatter_map, 0.0, 30.0).notes)
 
 
-def test_sample_rejects_a_zero_distance():
+def test_reading_at_the_isocentre_is_rejected():
+    with pytest.raises(isodose.IsodoseError, match="at the isocentre"):
+        isodose.sample_at(plan_map(), 0.0, 0.0)
     with pytest.raises(isodose.IsodoseError, match="distance must be positive"):
-        isodose.sample(plan_map(), 0.0, 0.0)
+        isodose.extrapolate(plan_map(), 0.0, 0.0)
+
+
+# --- workload basis ----------------------------------------------------------
+
+def test_weekly_multiplier_by_chart_basis():
+    """Charts quoted per mAs scale by workload, not by procedure count."""
+    assert isodose.weekly_multiplier("procedure", 100, 5000) == 100
+    assert isodose.weekly_multiplier("scan", 100, 5000) == 100
+    assert isodose.weekly_multiplier("mAs", 100, 5000) == 5000
+    assert isodose.weekly_multiplier("100 mAs", 100, 5000) == 50
+    with pytest.raises(isodose.IsodoseError, match="unknown chart basis"):
+        isodose.weekly_multiplier("per banana", 1, 1)
 
 
 # --- orientation on the plan -------------------------------------------------
@@ -254,7 +287,8 @@ def test_rotation_turns_the_chart_on_the_plan():
 def test_rotating_the_scanner_changes_the_dose_at_a_fixed_point():
     """Turning the scanner so the table points at the wall raises the dose there."""
     project = chart_project()
-    poi = north_point(project)
+    poi = north_point(project, metres=59.1 * IN)
+    poi.offset_applied = True
     source = project.source("ct1")
 
     source.rotation_deg = 0.0                     # table axis points north, at the point
@@ -262,29 +296,40 @@ def test_rotating_the_scanner_changes_the_dose_at_a_fixed_point():
     source.rotation_deg = 90.0                    # bore points north instead
     side_on = evaluate_point(project, poi).methods[0].total
 
-    assert facing > 10 * side_on
+    # The chart reads 0.087 down the table and 0.002 out through the bore.
+    assert facing == pytest.approx(0.087 * 100, rel=1e-9)
+    assert facing > 40 * side_on
 
 
 def test_chart_result_matches_a_hand_calculation():
-    """0.087 mGy at 59.1 in, scaled to 4 m, times 100 procedures a week."""
+    """The chart reads 0.087 mGy at that spot; times 100 procedures a week."""
     project = chart_project()
-    poi = north_point(project, metres=4.0)
+    poi = north_point(project, metres=59.1 * IN)
+    poi.offset_applied = True
     result = evaluate_point(project, poi)
 
-    strength = 0.087 * (59.1 * IN) ** 2   # governing cell on the table-axis bearing
-    expected = strength / 4.0**2 * 100
-    assert result.methods[0].total == pytest.approx(expected, rel=1e-9)
+    assert result.methods[0].total == pytest.approx(0.087 * 100, rel=1e-9)
     assert result.contributions[0].terms["chart kerma at the point (mGy per procedure)"] == (
-        pytest.approx(strength / 16.0, rel=1e-9)
+        pytest.approx(0.087, rel=1e-9)
     )
+    assert any("no inverse-square correction" in n for n in result.contributions[0].notes)
 
 
-def test_audit_trail_names_the_chart_and_the_cell_used():
+def test_audit_trail_names_the_chart_and_says_where_it_was_read():
     project = chart_project()
-    poi = north_point(project)
+    poi = north_point(project, metres=59.1 * IN)
+    poi.offset_applied = True
     notes = evaluate_point(project, poi).contributions[0].notes
-    assert any("Vendor plan view" in n for n in notes)
-    assert any("chart cell at" in n and "scaled by" in n for n in notes)
+    assert any("Vendor plan view" in n and "plan view" in n for n in notes)
+    assert any("chart read at" in n and "from the isocentre" in n for n in notes)
+
+
+def test_audit_trail_shows_the_projection_when_the_chart_is_left_behind():
+    project = chart_project()
+    poi = north_point(project, metres=9.0)
+    poi.offset_applied = True
+    notes = evaluate_point(project, poi).contributions[0].notes
+    assert any("beyond the chart" in n and "scaled by" in n for n in notes)
 
 
 def test_missing_chart_is_reported_not_crashed():
@@ -356,19 +401,18 @@ def test_chart_is_read_at_the_distance_the_rest_of_the_calculation_uses():
     plain = evaluate_point(project, poi)
     assert plain.contributions[0].distance_m == pytest.approx(4.0)
 
-    # The placed point marks the barrier, so 0.3 m is added.
+    # The placed point marks the barrier, so 0.3 m is added and the chart is
+    # read 0.3 m further out rather than at the placed spot.
     poi.offset_applied = False
     with_standoff = evaluate_point(project, poi)
     assert with_standoff.contributions[0].distance_m == pytest.approx(4.3)
-    assert with_standoff.methods[0].total == pytest.approx(
-        plain.methods[0].total * (4.0 / 4.3) ** 2, rel=1e-9
-    )
+    assert any("chart read at 4.30 m" in n for n in with_standoff.contributions[0].notes)
 
-    # An entered distance must move the chart reading too.
+    # An entered distance moves the read position out past the chart, where
+    # inverse square legitimately takes over.
     poi.offset_applied = True
     poi.distance_overrides = {"ct1": 8.0}
     overridden = evaluate_point(project, poi)
-    assert overridden.methods[0].total == pytest.approx(
-        plain.methods[0].total / 4.0, rel=1e-9
-    )
-    assert any("chart read at 8.00 m" in n for n in overridden.contributions[0].notes)
+    notes = overridden.contributions[0].notes
+    assert any("chart read at 8.00 m" in n for n in notes)
+    assert any("beyond the chart" in n for n in notes)
