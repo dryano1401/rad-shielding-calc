@@ -149,6 +149,21 @@ function floorImage(floorId) {
   return image;
 }
 
+// Map a point from one floor's PDF space into another's, through the shared
+// world position their alignment points define. Each drawing has its own
+// origin and may be plotted at its own scale, so a raw coordinate from one
+// sheet means nothing on another until it has been through this.
+function floorTransform(from, to) {
+  if (!from.metres_per_unit || !to.metres_per_unit || !from.alignment || !to.alignment) {
+    return null;   // not registered to each other yet, so nothing can be placed
+  }
+  const factor = from.metres_per_unit / to.metres_per_unit;
+  return (x, y) => ({
+    x: to.alignment[0] + (x - from.alignment[0]) * factor,
+    y: to.alignment[1] + (y - from.alignment[1]) * factor,
+  });
+}
+
 function pointsOnFloor(floorId) {
   if (!state.project) return { sources: [], pois: [] };
   return {
@@ -187,7 +202,7 @@ function draw() {
   if (state.ghost) {
     for (const other of state.project.floors) {
       if (other.id === floor.id) continue;
-      drawPoints(other, 0.28);
+      drawPoints(other, 0.28, floorTransform(other, floor));
     }
   }
   drawWalls(floor);
@@ -370,14 +385,19 @@ function drawLinks(floor) {
   ctx.restore();
 }
 
-function drawPoints(floor, alpha) {
+function drawPoints(floor, alpha, transform) {
   const { sources, pois } = pointsOnFloor(floor.id);
+  // A ghosted floor that is not registered to this one cannot be placed at all.
+  if (alpha < 1 && transform === null) return;
+  const place = transform
+    ? (x, y) => { const p = transform(x, y); return toScreen(p.x, p.y); }
+    : (x, y) => toScreen(x, y);
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.font = '11px system-ui';
 
   for (const source of sources) {
-    const p = toScreen(source.x, source.y);
+    const p = place(source.x, source.y);
     const on = state.selection?.id === source.id;
     // Equipment with a scatter chart is directional, so show which way its
     // chart is pointing: the arrow is the chart's +y, usually the table axis.
@@ -407,29 +427,37 @@ function drawPoints(floor, alpha) {
     ctx.closePath();
     ctx.fill();
     if (on) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
-    label(p.x + 11, p.y + 4, source.label || 'source', '#ffb684', alpha);
+    label(p.x + 11, p.y + 4,
+          alpha < 1 ? `${source.label || 'source'} · ${floor.name}` : (source.label || 'source'),
+          '#ffb684', alpha);
   }
 
   for (const poi of pois) {
-    const p = toScreen(poi.x, poi.y);
+    const p = place(poi.x, poi.y);
     const on = state.selection?.id === poi.id;
     ctx.fillStyle = '#40d0a0';
     ctx.beginPath();
     ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
     ctx.fill();
     if (on) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
-    label(p.x + 11, p.y + 4, poi.label || 'point', '#8fe6c8', alpha);
+    label(p.x + 11, p.y + 4,
+          alpha < 1 ? `${poi.label || 'point'} · ${floor.name}` : (poi.label || 'point'),
+          '#8fe6c8', alpha);
   }
   ctx.restore();
 }
 
 function label(x, y, text, colour, alpha) {
-  if (alpha < 1) return;
-  ctx.fillStyle = 'rgba(10,12,16,.72)';
+  // Ghosted markers are drawn faint so they read as another floor, but their
+  // labels still have to be legible, so the text is lifted back up.
+  ctx.save();
+  if (alpha < 1) ctx.globalAlpha = 0.85;
+  ctx.fillStyle = 'rgba(10,12,16,.8)';
   const width = ctx.measureText(text).width;
   ctx.fillRect(x - 3, y - 11, width + 6, 15);
   ctx.fillStyle = colour;
   ctx.fillText(text, x, y);
+  ctx.restore();
 }
 
 function hitTest(pdf) {
@@ -614,11 +642,7 @@ canvas.addEventListener('click', async event => {
       floor_id: floor.id, x: pdf.x, y: pdf.y,
       label: `Source ${state.project.sources.length + 1}`,
       method: 'tg108',
-      params: {
-        kind: 'uptake', nuclide: 'F-18', administered_activity_MBq: 555,
-        patients_per_week: 40, uptake_time_h: 1.0, imaging_time_h: 0.5,
-        void_factor: 0.85, scanner_attenuation: 1.0,
-      },
+      params: { components: [defaultIsotope()] },
     });
     setProject(project);
     select({ kind: 'source', id: project.sources[project.sources.length - 1].id });
@@ -957,6 +981,69 @@ function chartBasis(params) {
   return chart?.per || 'procedure';
 }
 
+const defaultIsotope = () => ({
+  kind: 'uptake', nuclide: 'F-18', administered_activity_MBq: 555,
+  patients_per_week: 40, uptake_time_h: 1.0, imaging_time_h: 0.5,
+  void_factor: 0.85, scanner_attenuation: 1.0, label: '',
+});
+
+// A source region may run several tracers. Each keeps its own activity,
+// patient load and timings, so each decays on its own half-life.
+const isotopesOf = source =>
+  source.params?.components?.length ? source.params.components : [{ ...source.params }];
+
+function renderIsotopes(source) {
+  const entries = isotopesOf(source);
+  const options = (state.options?.nuclides || []).map(n => [n, n]);
+
+  const blocks = entries.map((c, i) => `
+    <div class="isotope">
+      <div class="top">
+        <select data-c="${i}" data-cf="nuclide">
+          ${options.map(([v, t]) =>
+            `<option value="${v}" ${c.nuclide === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+        <select data-c="${i}" data-cf="kind">
+          <option value="uptake" ${c.kind !== 'imaging' ? 'selected' : ''}>Uptake</option>
+          <option value="imaging" ${c.kind === 'imaging' ? 'selected' : ''}>Imaging</option>
+        </select>
+        ${entries.length > 1 ? `<button data-remove="${i}" title="Remove isotope">×</button>` : ''}
+      </div>
+      <div class="isotope-fields">
+        <label>Activity (MBq)
+          <input type="number" value="${c.administered_activity_MBq ?? 555}"
+                 data-c="${i}" data-cf="administered_activity_MBq"></label>
+        <label>Patients / week
+          <input type="number" value="${c.patients_per_week ?? 0}"
+                 data-c="${i}" data-cf="patients_per_week"></label>
+      </div>
+      <div class="isotope-fields">
+        <label>Uptake time (h)
+          <input type="number" step="0.25" value="${c.uptake_time_h ?? 1}"
+                 data-c="${i}" data-cf="uptake_time_h"></label>
+        ${c.kind === 'imaging' ? `<label>Imaging time (h)
+          <input type="number" step="0.25" value="${c.imaging_time_h ?? 0.5}"
+                 data-c="${i}" data-cf="imaging_time_h"></label>` : '<label></label>'}
+      </div>
+      ${c.kind === 'imaging' ? `<div class="isotope-fields">
+        <label>Voiding factor
+          <input type="number" step="0.05" value="${c.void_factor ?? 0.85}"
+                 data-c="${i}" data-cf="void_factor"></label>
+        <label>Scanner self-shielding
+          <input type="number" step="0.05" value="${c.scanner_attenuation ?? 1.0}"
+                 data-c="${i}" data-cf="scanner_attenuation"></label>
+      </div>` : ''}
+    </div>`).join('');
+
+  return `<h2 style="margin-top:12px">Isotopes in this region</h2>
+    ${blocks}
+    <button data-add-isotope class="wide">Add isotope</button>
+    ${entries.length > 1
+      ? '<p class="hint">Each isotope decays on its own half-life and timings; the doses are summed. All emit 511 keV, so one barrier serves them all.</p>'
+      : ''}
+    `;
+}
+
 function renderSourceInspector(title, box) {
   const source = state.project.sources.find(s => s.id === state.selection.id);
   if (!source) return select(null);
@@ -967,7 +1054,19 @@ function renderSourceInspector(title, box) {
   const workloadOptions = (state.options?.workloads || []).map(w =>
     `<option ${p.workload === w ? 'selected' : ''}>${escapeHtml(w)}</option>`).join('');
 
+  const reference = source.reference_dose || {};
+  const referenceBlock = reference.error
+    ? `<div class="ref bad">Dose at 1 m unavailable: ${escapeHtml(reference.error)}</div>`
+    : reference.value === undefined ? ''
+    : `<div class="ref">
+         <span class="big">${fmt(reference.value)}</span> ${escapeHtml(reference.unit)}
+         <div class="sub">${escapeHtml(reference.note)}</div>
+         ${(reference.components || []).map(c =>
+           `<div class="sub">${escapeHtml(c.label)}: ${fmt(c.value)}</div>`).join('')}
+       </div>`;
+
   box.innerHTML = `
+    ${referenceBlock}
     <div class="field">Label<input type="text" value="${escapeHtml(source.label)}" data-p="label"></div>
     <div class="field">Method
       <select data-p="method">
@@ -979,22 +1078,7 @@ function renderSourceInspector(title, box) {
     <div class="field">Height above floor (m)
       <input type="number" step="0.1" value="${source.height_above_floor_m}" data-p="height_above_floor_m">
     </div>
-    ${source.method === 'tg108' ? `
-      <div class="field">Source type
-        <select data-k="kind">
-          <option value="uptake" ${p.kind === 'uptake' ? 'selected' : ''}>Uptake / waiting patient</option>
-          <option value="imaging" ${p.kind === 'imaging' ? 'selected' : ''}>Imaging / scanner</option>
-        </select>
-      </div>
-      <div class="field">Radionuclide<select data-k="nuclide">${nuclideOptions}</select></div>
-      <div class="field">Administered activity (MBq)<input type="number" value="${p.administered_activity_MBq ?? 555}" data-k="administered_activity_MBq"></div>
-      <div class="field">Patients per week<input type="number" value="${p.patients_per_week ?? 40}" data-k="patients_per_week"></div>
-      <div class="field">Uptake time (h)<input type="number" step="0.25" value="${p.uptake_time_h ?? 1}" data-k="uptake_time_h"></div>
-      ${p.kind === 'imaging' ? `
-        <div class="field">Imaging time (h)<input type="number" step="0.25" value="${p.imaging_time_h ?? 0.5}" data-k="imaging_time_h"></div>
-        <div class="field">Voiding factor<input type="number" step="0.05" value="${p.void_factor ?? 0.85}" data-k="void_factor"></div>
-        <div class="field">Scanner self-shielding<input type="number" step="0.05" value="${p.scanner_attenuation ?? 1.0}" data-k="scanner_attenuation"></div>
-        <p class="hint">1.0 takes no gantry credit. TG-108 suggests ~0.85 is realistic.</p>` : ''}
+    ${source.method === 'tg108' ? renderIsotopes(source) + `
     ` : source.method === 'ncrp147' ? `
       <div class="field">Workload distribution<select data-k="workload">${workloadOptions}</select></div>
       <div class="field">Barrier type
@@ -1064,6 +1148,35 @@ function renderSourceInspector(title, box) {
     <button data-act="delete" class="wide">Delete source</button>`;
 
   wireInspector(box, `/api/sources/${source.id}`, source);
+
+  const saveIsotopes = async entries => {
+    try {
+      setProject(await send(`/api/sources/${source.id}`, 'PATCH', {
+        params: { ...(source.params || {}), components: entries },
+      }));
+    } catch (error) { alert(error.message); }
+  };
+
+  box.querySelectorAll('[data-cf]').forEach(input => {
+    input.onchange = () => {
+      const entries = isotopesOf(source).map(c => ({ ...c }));
+      const value = input.type === 'number' ? parseFloat(input.value) : input.value;
+      entries[Number(input.dataset.c)][input.dataset.cf] = value;
+      saveIsotopes(entries);
+    };
+  });
+
+  const add = box.querySelector('[data-add-isotope]');
+  if (add) add.onclick = () => saveIsotopes([...isotopesOf(source).map(c => ({ ...c })),
+                                             defaultIsotope()]);
+
+  box.querySelectorAll('[data-remove]').forEach(button => {
+    button.onclick = () => {
+      const entries = isotopesOf(source).map(c => ({ ...c }));
+      entries.splice(Number(button.dataset.remove), 1);
+      saveIsotopes(entries);
+    };
+  });
 }
 
 function renderPoiInspector(title, box) {
@@ -1358,7 +1471,19 @@ document.querySelectorAll('.tool').forEach(button => {
 document.getElementById('btn-zoom-in').onclick = () => zoomBy(1.25);
 document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / 1.25);
 document.getElementById('btn-zoom-fit').onclick = () => { fitToView(); draw(); };
-document.getElementById('ghost').onchange = event => { state.ghost = event.target.checked; draw(); };
+document.getElementById('ghost').onchange = event => {
+  state.ghost = event.target.checked;
+  if (state.ghost) {
+    const floor = currentFloor();
+    const unplaceable = state.project.floors
+      .filter(f => f.id !== floor?.id && floorTransform(f, floor) === null)
+      .map(f => f.name);
+    setStatus(unplaceable.length
+      ? `Cannot place ${unplaceable.join(', ')} on this view — each floor needs a scale and an alignment point.`
+      : 'Other floors shown at their true position, through the alignment points.');
+  }
+  draw();
+};
 document.getElementById('obliquity').onchange = async event => {
   setProject(await send('/api/project/obliquity', 'POST', { enabled: event.target.checked }));
   if (state.results) calculate();
@@ -1397,6 +1522,17 @@ document.getElementById('pdf-file').onchange = async event => {
     setProject(await api('/api/floors', { method: 'POST', body }));
   } catch (error) { alert(error.message); }
   event.target.value = '';
+};
+
+document.getElementById('btn-scale').onclick = async () => {
+  const floor = currentFloor();
+  if (!floor) { alert('Add a floor first.'); return; }
+  const text = document.getElementById('scale-text').value.trim();
+  if (!text) return;
+  try {
+    setProject(await send(`/api/floors/${floor.id}`, 'PATCH', { calibration: { scale: text } }));
+    setStatus(`${floor.name} — ${currentFloor().scale_description}`);
+  } catch (error) { alert(error.message); }
 };
 
 document.getElementById('btn-spacing').onclick = async () => {

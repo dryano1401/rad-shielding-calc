@@ -12,6 +12,7 @@ applied at calculation time.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
@@ -39,6 +40,73 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+# A PDF user-space unit is 1/72 inch of paper.  A drawing scale relates that
+# paper length to a real one, so the two together fix metres per PDF unit
+# without anything being clicked.
+PDF_UNIT_METRES = 0.0254 / 72.0
+
+_SCALE_TOKEN = re.compile(
+    r"^\s*(\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?)\s*"
+    r"(in|inch|inches|\"|ft|foot|feet|'|mm|cm|m)?\s*$",
+    re.IGNORECASE,
+)
+
+_SCALE_UNITS = {
+    "in": 0.0254, "inch": 0.0254, "inches": 0.0254, '"': 0.0254,
+    "ft": 0.3048, "foot": 0.3048, "feet": 0.3048, "'": 0.3048,
+    "mm": 0.001, "cm": 0.01, "m": 1.0,
+}
+
+
+def _scale_length(token: str) -> tuple[float, str | None]:
+    """Parse one side of a scale, e.g. ``1/4"`` or ``2.4 m``, into metres."""
+    match = _SCALE_TOKEN.match(token)
+    if not match:
+        raise ValueError(f"could not read {token.strip()!r} as a length")
+    number, unit = match.group(1), match.group(2)
+    if "/" in number:
+        top, bottom = (float(part) for part in number.split("/"))
+        if bottom == 0:
+            raise ValueError("a scale cannot divide by zero")
+        value = top / bottom
+    else:
+        value = float(number)
+    if value <= 0:
+        raise ValueError(f"{token.strip()!r} must be greater than zero")
+    return value, (unit.lower() if unit else None)
+
+
+def parse_scale(text: str) -> tuple[float, str]:
+    """Read a written drawing scale and return ``(real per paper, description)``.
+
+    Accepts the forms a drawing states its scale in:
+
+    - a bare ratio, ``1:50`` or ``1:100``
+    - paper against real with units, ``1/4" = 1'`` or ``1 cm = 1 m``
+
+    Both sides are interpreted as *paper length* then *real length*, which is
+    how a scale is conventionally written.  A ratio with no units on either
+    side is taken as paper:real directly.
+    """
+    cleaned = text.strip().replace("=", ":")
+    if ":" not in cleaned:
+        raise ValueError(
+            "write a scale as paper:real, for example '1:50', '1/4\" = 1\'' or '1 cm = 1 m'"
+        )
+    left, _, right = cleaned.partition(":")
+    paper, paper_unit = _scale_length(left)
+    real, real_unit = _scale_length(right)
+
+    if paper_unit is None and real_unit is None:
+        ratio = real / paper
+        return ratio, f"1:{ratio:g}"
+    if paper_unit is None or real_unit is None:
+        raise ValueError("give units on both sides of the scale, or on neither")
+
+    ratio = (real * _SCALE_UNITS[real_unit]) / (paper * _SCALE_UNITS[paper_unit])
+    return ratio, f"{left.strip()} = {right.strip()} (1:{ratio:g})"
+
+
 @dataclass
 class Calibration:
     """Two clicked points and the real distance between them.
@@ -50,10 +118,17 @@ class Calibration:
         unit: Unit of ``known_distance``; a key of :data:`LENGTH_UNITS`.
     """
 
-    p1: tuple[float, float]
-    p2: tuple[float, float]
-    known_distance: float
+    p1: tuple[float, float] = (0.0, 0.0)
+    p2: tuple[float, float] = (0.0, 0.0)
+    known_distance: float = 0.0
     unit: str = "ft"
+    scale_text: str = ""
+    scale_ratio: float | None = None
+
+    @property
+    def is_typed(self) -> bool:
+        """True when the scale was written down rather than measured off the page."""
+        return self.scale_ratio is not None
 
     @property
     def pixel_distance(self) -> float:
@@ -65,15 +140,27 @@ class Calibration:
     @property
     def metres_per_unit(self) -> float:
         """Metres of real world per PDF unit."""
+        if self.scale_ratio is not None:
+            if self.scale_ratio <= 0:
+                raise ValueError("scale ratio must be positive")
+            return PDF_UNIT_METRES * self.scale_ratio
         if self.pixel_distance <= 0:
             raise ValueError("calibration points are coincident; pick two distinct points")
         if self.known_distance <= 0:
             raise ValueError("calibration distance must be positive")
         return (self.known_distance * LENGTH_UNITS[self.unit]) / self.pixel_distance
 
+    @classmethod
+    def from_scale(cls, text: str) -> Calibration:
+        """Build a calibration from a written scale such as ``1/4" = 1'``."""
+        ratio, description = parse_scale(text)
+        return cls(scale_text=description, scale_ratio=ratio)
+
     def describe(self) -> str:
         """One-line summary for display, so the scale can be eyeballed."""
         mpu = self.metres_per_unit
+        if self.scale_ratio is not None:
+            return f"{self.scale_text} = {mpu:.5f} m/unit ({1 / mpu:.2f} units/m)"
         return (
             f"{self.known_distance:g} {self.unit} over {self.pixel_distance:.1f} pdf units "
             f"= {mpu:.5f} m/unit ({1 / mpu:.2f} units/m)"
@@ -402,10 +489,12 @@ class Project:
             cal_raw = raw.get("calibration")
             calibration = (
                 Calibration(
-                    p1=tuple(cal_raw["p1"]),
-                    p2=tuple(cal_raw["p2"]),
-                    known_distance=cal_raw["known_distance"],
+                    p1=tuple(cal_raw.get("p1", (0.0, 0.0))),
+                    p2=tuple(cal_raw.get("p2", (0.0, 0.0))),
+                    known_distance=cal_raw.get("known_distance", 0.0),
                     unit=cal_raw.get("unit", "ft"),
+                    scale_text=cal_raw.get("scale_text", ""),
+                    scale_ratio=cal_raw.get("scale_ratio"),
                 )
                 if cal_raw
                 else None

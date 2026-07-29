@@ -55,6 +55,7 @@ class SourceContribution:
     barriers: list[dict[str, Any]] = field(default_factory=list)
     path_transmission: float = 1.0
     path_equivalent_mm: float = 0.0
+    components: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -97,20 +98,35 @@ def _existing_credit_mm(poi: PointOfInterest, material: str, unit: str) -> float
     return poi.existing_thickness * _MM_PER_UNIT[unit]
 
 
-def _tg108_source(source: SourcePoint) -> tg108.PatientSource:
-    """Build a physics source from the stored parameters."""
-    p = source.params
+def _tg108_component(entry: dict[str, Any], fallback_label: str) -> tg108.PatientSource:
+    """Build one isotope's physics source from its stored parameters."""
+    nuclide = entry.get("nuclide", "F-18")
     return tg108.PatientSource(
-        kind=p.get("kind", "uptake"),
-        nuclide=p.get("nuclide", "F-18"),
-        administered_activity_MBq=float(p.get("administered_activity_MBq", 0.0)),
-        patients_per_week=float(p.get("patients_per_week", 0.0)),
-        uptake_time_h=float(p.get("uptake_time_h", 0.0)),
-        imaging_time_h=float(p.get("imaging_time_h", 0.0)),
-        void_factor=float(p.get("void_factor", tg108.DEFAULT_VOID_FACTOR)),
-        scanner_attenuation=float(p.get("scanner_attenuation", 1.0)),
-        label=source.label or source.id,
+        kind=entry.get("kind", "uptake"),
+        nuclide=nuclide,
+        administered_activity_MBq=float(entry.get("administered_activity_MBq", 0.0) or 0.0),
+        patients_per_week=float(entry.get("patients_per_week", 0.0) or 0.0),
+        uptake_time_h=float(entry.get("uptake_time_h", 0.0) or 0.0),
+        imaging_time_h=float(entry.get("imaging_time_h", 0.0) or 0.0),
+        void_factor=float(entry.get("void_factor", tg108.DEFAULT_VOID_FACTOR) or 1.0),
+        scanner_attenuation=float(entry.get("scanner_attenuation", 1.0) or 1.0),
+        label=entry.get("label") or f"{nuclide} ({fallback_label})",
     )
+
+
+def _tg108_components(source: SourcePoint) -> list[tg108.PatientSource]:
+    """Every isotope a source region runs, as physics sources.
+
+    A source carrying a ``components`` list runs several tracers from one
+    place, each with its own activity, patient load and timings, and so its
+    own decay factors.  A source without one is a single isotope described by
+    the parameters directly, which is how projects were written before mixes
+    were supported.
+    """
+    entries = source.params.get("components")
+    if entries:
+        return [_tg108_component(entry, source.label or source.id) for entry in entries]
+    return [_tg108_component(source.params, source.label or source.id)]
 
 
 def _ncrp_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_barriers.XrayBarrierInputs:
@@ -344,7 +360,11 @@ def _solve_tg108(
     """Attenuate each TG-108 source by its own path, sum, then solve."""
     goal = tg108_goal(poi.area_class)
 
-    nuclide_names = {src.params.get("nuclide", "F-18") for src, _ in pairs}
+    # Every isotope in play emits the same 511 keV annihilation photon, so one
+    # transmission fit serves the lot; F-18 stands in when a mix is present.
+    nuclide_names = {
+        component.nuclide for src, _ in pairs for component in _tg108_components(src)
+    }
     attenuation_nuclide = "F-18" if len(nuclide_names) > 1 else next(iter(nuclide_names))
     params_for = lambda material: nuclides.get_archer(attenuation_nuclide, material)
 
@@ -358,17 +378,37 @@ def _solve_tg108(
     contributions: list[SourceContribution] = []
     total = 0.0
     for src, dist in pairs:
-        dose = tg108.weekly_dose(_tg108_source(src), dist.metres)
+        components = _tg108_components(src)
+        combined = tg108.combined_weekly_dose(components, dist.metres)
         crossings, geometry_warnings = path_barriers(
             project, src, poi, apply_obliquity=project.apply_obliquity
         )
         b_path, equivalent_mm, details, barrier_warnings = _path_attenuation(
             crossings, params_for
         )
-        attenuated = dose.weekly_dose_uSv * b_path
+        attenuated = combined.weekly_dose_uSv * b_path
         total += attenuated
 
-        notes = list(dose.notes) + dist.notes + geometry_warnings + barrier_warnings
+        per_nuclide = [
+            {
+                "label": dose.source_label,
+                "nuclide": component.nuclide,
+                "kind": component.kind,
+                "unshielded_uSv": dose.weekly_dose_uSv,
+                "value_uSv": dose.weekly_dose_uSv * b_path,
+                "terms": dose.terms,
+                "notes": list(dose.notes),
+            }
+            for component, dose in zip(components, combined.per_nuclide)
+        ]
+
+        single = len(combined.per_nuclide) == 1
+        dose = combined.per_nuclide[0]
+        notes = list(dose.notes) if single else [
+            f"{len(per_nuclide)} isotopes from this region, each decayed on its own "
+            "half-life and timings, then summed"
+        ]
+        notes += dist.notes + geometry_warnings + barrier_warnings
         if details:
             notes.append(
                 f"path crosses {len(details)} barrier(s), "
@@ -382,8 +422,11 @@ def _solve_tg108(
                 distance_m=dist.metres,
                 quantity="uSv/week",
                 value=attenuated,
-                unshielded_value=dose.weekly_dose_uSv,
-                terms=dose.terms,
+                unshielded_value=combined.weekly_dose_uSv,
+                terms=dose.terms if single else {
+                    d["label"]: round(d["unshielded_uSv"], 4) for d in per_nuclide
+                },
+                components=per_nuclide,
                 notes=notes,
                 geometric_distance_m=dist.geometric_m,
                 barriers=details,
@@ -602,6 +645,70 @@ def evaluate_project(project: Project) -> list[PointResult]:
     return [evaluate_point(project, poi) for poi in project.pois]
 
 
+def reference_dose(project: Project, source: SourcePoint) -> dict[str, Any]:
+    """Unshielded weekly dose one metre from a source, for sanity checking.
+
+    A single number that depends only on the source's own parameters, not on
+    where anything was placed, so a mistyped activity or patient load shows up
+    as an implausible figure straight away rather than surfacing later as a
+    barrier thickness nobody expected.
+
+    Returns:
+        ``{"value", "unit", "note"}``, plus ``"components"`` for an isotope
+        mix, or ``{"error"}`` where the source is not yet fully specified.
+    """
+    try:
+        if source.method == "tg108":
+            components = _tg108_components(source)
+            combined = tg108.combined_weekly_dose(components, 1.0)
+            result: dict[str, Any] = {
+                "value": combined.weekly_dose_uSv,
+                "unit": "uSv/week",
+                "note": "unshielded, at 1 m",
+            }
+            if len(components) > 1:
+                result["components"] = [
+                    {"label": dose.source_label, "value": dose.weekly_dose_uSv}
+                    for dose in combined.per_nuclide
+                ]
+            return result
+
+        goal = ncrp147_goal("uncontrolled")
+        if source.method == "ncrp147_ct":
+            inputs = _ct_inputs(source, 1.0, 1.0)
+            if inputs.scatter.method == "chart":
+                basis = _chart_basis(project, source)
+                units = isodose.weekly_multiplier(
+                    basis,
+                    float(source.params.get("procedures_per_week", 0.0) or 0.0),
+                    float(source.params.get("mas_per_week", 0.0) or 0.0),
+                )
+                map_id = source.params.get("plan_map_id") or source.params.get(
+                    "elevation_map_id"
+                )
+                if not map_id:
+                    return {"error": "no scatter chart assigned"}
+                scatter_map = _scatter_map(project, map_id)
+                # The chart is directional, so quote its strongest bearing:
+                # a peak rather than a single figure that would mislead.
+                peak = max(cell.strength for cell in scatter_map.cells)
+                return {
+                    "value": peak * units,
+                    "unit": "mGy/week",
+                    "note": f"unshielded, peak bearing at 1 m, per {basis}",
+                }
+            return {
+                "value": ncrp_ct.evaluate(inputs, goal).unshielded_weekly_kerma_mGy,
+                "unit": "mGy/week",
+                "note": "unshielded, at 1 m",
+            }
+
+        kerma, _, _ = ncrp_barriers.unshielded_kerma(_ncrp_inputs(source, 1.0, 1.0))
+        return {"value": kerma, "unit": "mGy/week", "note": "unshielded, at 1 m"}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def describe_distances(project: Project) -> list[dict[str, Any]]:
     """Per point, the distance to each linked source, without running the physics.
 
@@ -726,6 +833,9 @@ def results_to_rows(results: list[PointResult], materials: list[str]) -> list[di
                     "unshielded_value": round(contribution.unshielded_value, 4),
                     "path_transmission": round(contribution.path_transmission, 5),
                     "path_lead_equivalent_mm": round(contribution.path_equivalent_mm, 3),
+                    "isotopes": " + ".join(
+                        f"{c['label']} {c['unshielded_uSv']:.3g}" for c in contribution.components
+                    ) if len(contribution.components) > 1 else "",
                     "barriers": " + ".join(
                         f"{b['label']} {b['effective_thickness_mm']:g} mm {b['material']}"
                         for b in contribution.barriers

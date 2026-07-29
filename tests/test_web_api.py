@@ -749,3 +749,118 @@ def test_editing_a_wall_to_an_absurd_thickness_is_rejected(client):
     assert "millimetres" in response.json()["detail"]
     # The original wall survives a rejected edit.
     assert client.get("/api/project").json()["floors"][0]["walls"][0]["thickness_mm"] == 200
+
+
+def mix_scenario(client, components):
+    """A source running the given isotope mix, with a point 4 m away."""
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    calibrate(client, floor_id, metres_per_unit=0.1)
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0]})
+    project = client.post("/api/sources", json={
+        "floor_id": floor_id, "x": 0, "y": 0, "label": "Uptake room",
+        "method": "tg108", "height_above_floor_m": 1.0,
+        "params": {"components": components},
+    }).json()
+    client.post("/api/pois", json={
+        "floor_id": floor_id, "x": 40, "y": 0, "label": "Office", "occupancy": 1.0,
+        "auto_height": False, "height_above_floor_m": 1.0, "offset_applied": True,
+        "linked_source_ids": [project["sources"][0]["id"]],
+    })
+    client.post("/api/materials", json={"materials": ["lead"]})
+    return project["sources"][0]["id"]
+
+
+FDG = {"kind": "uptake", "nuclide": "F-18", "administered_activity_MBq": 555,
+       "patients_per_week": 40, "uptake_time_h": 1.0, "label": "F-18 FDG"}
+DOTATATE = {"kind": "uptake", "nuclide": "Ga-68", "administered_activity_MBq": 185,
+            "patients_per_week": 6, "uptake_time_h": 0.75, "label": "Ga-68 DOTATATE"}
+
+
+def test_isotope_mix_sums_and_reports_each_component(client):
+    mix_scenario(client, [FDG, DOTATATE])
+    contribution = client.get("/api/results").json()["results"][0]["contributions"][0]
+    assert len(contribution["components"]) == 2
+    assert contribution["unshielded_value"] == pytest.approx(
+        sum(c["unshielded_uSv"] for c in contribution["components"])
+    )
+    assert any("each decayed on its own" in n for n in contribution["notes"])
+
+
+def test_adding_an_isotope_through_the_api_raises_the_requirement(client):
+    source_id = mix_scenario(client, [FDG])
+    before = client.get("/api/results").json()["results"][0]
+    client.patch(f"/api/sources/{source_id}", json={"params": {"components": [FDG, DOTATATE]}})
+    after = client.get("/api/results").json()["results"][0]
+    assert after["methods"][0]["total"] > before["methods"][0]["total"]
+    assert after["governing_thickness_mm"]["lead"] > before["governing_thickness_mm"]["lead"]
+
+
+def test_bad_isotope_entries_are_rejected(client):
+    source_id = mix_scenario(client, [FDG])
+    for bad, message in [
+        ({**FDG, "nuclide": "Xx-99"}, "not registered"),
+        ({**FDG, "kind": "sideways"}, "kind must be"),
+        ({**FDG, "uptake_time_h": 0}, "greater than zero"),
+        ({**FDG, "administered_activity_MBq": -5}, "cannot be negative"),
+    ]:
+        response = client.patch(f"/api/sources/{source_id}",
+                                json={"params": {"components": [bad]}})
+        assert response.status_code == 400, bad
+        assert message in response.json()["detail"]
+    # The source survives every rejected edit.
+    assert client.get("/api/results").json()["results"][0]["methods"][0]["total"] > 0
+
+
+def test_isotope_mix_appears_in_the_csv(client):
+    mix_scenario(client, [FDG, DOTATATE])
+    rows = list(csv.DictReader(io.StringIO(client.get("/api/results.csv").text)))
+    source_row = next(row for row in rows if row["row_type"] == "source")
+    assert "F-18 FDG" in source_row["isotopes"]
+    assert "Ga-68 DOTATATE" in source_row["isotopes"]
+
+
+def test_scale_can_be_typed_instead_of_drawn(client):
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    project = client.patch(f"/api/floors/{floor_id}",
+                           json={"calibration": {"scale": '1/4" = 1\''}}).json()
+    floor = project["floors"][0]
+    assert "1:48" in floor["scale_description"]
+    assert floor["metres_per_unit"] == pytest.approx(0.0254 / 72 * 48)
+    assert "not calibrated" not in " ".join(project["problems"])
+
+
+def test_a_malformed_typed_scale_is_rejected(client):
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    response = client.patch(f"/api/floors/{floor_id}", json={"calibration": {"scale": "50"}})
+    assert response.status_code == 400
+    assert "paper:real" in response.json()["detail"]
+
+
+def test_source_reports_its_unshielded_dose_at_one_metre(client):
+    """A sanity figure that depends only on the source's own parameters."""
+    mix_scenario(client, [FDG])
+    source = client.get("/api/project").json()["sources"][0]
+    reference = source["reference_dose"]
+    assert reference["unit"] == "uSv/week"
+    assert "at 1 m" in reference["note"]
+    # 0.092 x 40 x 555 x 1 h x R(1 h) at 1 m.
+    assert reference["value"] == pytest.approx(0.092 * 40 * 555 * 0.8327, rel=0.01)
+
+
+def test_reference_dose_lists_each_isotope_of_a_mix(client):
+    mix_scenario(client, [FDG, DOTATATE])
+    reference = client.get("/api/project").json()["sources"][0]["reference_dose"]
+    assert len(reference["components"]) == 2
+    assert reference["value"] == pytest.approx(sum(c["value"] for c in reference["components"]))
+
+
+def test_reference_dose_reports_an_unusable_source_rather_than_failing(client):
+    source_id = mix_scenario(client, [FDG])
+    client.patch(f"/api/sources/{source_id}",
+                 json={"method": "ncrp147_ct",
+                       "params": {"scatter_method": "chart", "plan_map_id": ""}})
+    reference = client.get("/api/project").json()["sources"][0]["reference_dose"]
+    assert "error" in reference

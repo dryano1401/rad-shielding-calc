@@ -33,6 +33,16 @@
       <input id="pdf-file" type="file" accept="application/pdf" hidden>
       <button id="btn-add-floor" class="wide">Add floor from PDF…</button>
       <div class="row">
+        <label>Type a scale
+          <input id="scale-text" type="text" placeholder='1:50  or  1/4" = 1&apos;'>
+        </label>
+        <button id="btn-scale">Set</button>
+      </div>
+      <p class="hint">Applies to the floor being viewed, as an alternative to the
+        <em>Set scale</em> tool. Written paper:real, so <code>1:50</code>,
+        <code>1/4" = 1'</code> and <code>1 cm = 1 m</code> all work.</p>
+
+      <div class="row">
         <label>Floor-to-floor (m)
           <input id="spacing" type="text" placeholder="e.g. 4.3, 4.3">
         </label>

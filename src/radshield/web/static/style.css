@@ -218,3 +218,26 @@ dialog textarea {
   color: var(--muted); font-size: 11px;
 }
 .wall-fields input { width: 100%; }
+
+.isotope {
+  border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2);
+  padding: 7px; margin-bottom: 6px;
+}
+.isotope .top { display: flex; gap: 6px; align-items: center; }
+.isotope .top select { flex: 1; min-width: 0; }
+.isotope .top button { flex: none; padding: 3px 7px; }
+.isotope-fields { display: flex; gap: 6px; margin-top: 5px; }
+.isotope-fields label {
+  flex: 1; display: flex; flex-direction: column; gap: 2px;
+  color: var(--muted); font-size: 11px;
+}
+.isotope-fields input { width: 100%; }
+
+.ref {
+  border: 1px solid var(--line); border-left: 3px solid var(--source);
+  border-radius: 5px; background: var(--panel-2);
+  padding: 7px 9px; margin-bottom: 10px;
+}
+.ref .big { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ref .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.ref.bad { border-left-color: var(--error); color: var(--error); font-size: 11.5px; }

@@ -217,3 +217,72 @@ def test_old_projects_without_the_new_fields_still_load():
     restored = Project.from_dict(data)
     assert restored.floor("fl1").measurements == []
     assert restored.display_unit == "ft"
+
+
+# --- scales written down rather than measured off the page -------------------
+
+def test_parse_common_written_scales():
+    """The forms a drawing actually states its scale in."""
+    from radshield.model.project import parse_scale
+
+    assert parse_scale("1:50")[0] == pytest.approx(50)
+    assert parse_scale("1:100")[0] == pytest.approx(100)
+    assert parse_scale('1/4" = 1\'')[0] == pytest.approx(48)      # quarter-inch scale
+    assert parse_scale("1/8in = 1ft")[0] == pytest.approx(96)
+    assert parse_scale("1 cm = 1 m")[0] == pytest.approx(100)
+    assert parse_scale("1:50")[1] == "1:50"
+
+
+def test_typed_scale_gives_metres_per_pdf_unit():
+    """A PDF unit is 1/72 inch of paper, so 1:50 makes it 17.64 mm of building."""
+    from radshield.model.project import PDF_UNIT_METRES, Calibration
+
+    calibration = Calibration.from_scale("1:50")
+    assert calibration.is_typed
+    assert calibration.metres_per_unit == pytest.approx(PDF_UNIT_METRES * 50)
+    assert "1:50" in calibration.describe()
+    assert "m/unit" in calibration.describe()
+
+    quarter_inch = Calibration.from_scale('1/4" = 1\'')
+    assert quarter_inch.metres_per_unit == pytest.approx(PDF_UNIT_METRES * 48)
+
+
+def test_malformed_scales_are_rejected():
+    from radshield.model.project import parse_scale
+
+    for text, message in [
+        ("50", "paper:real"),
+        ("1:", "could not read"),
+        ("one:fifty", "could not read"),
+        ("1cm : 50", "units on both sides"),
+        ("1:0", "greater than zero"),
+        ("1/0 = 1m", "divide by zero"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            parse_scale(text)
+
+
+def test_a_typed_scale_measures_the_same_as_a_clicked_one():
+    """Both routes must land on the same metres per PDF unit."""
+    from radshield.model.project import Calibration, PDF_UNIT_METRES
+
+    typed = Calibration.from_scale("1:50")
+    span = 400.0
+    clicked = Calibration(p1=(0, 0), p2=(span, 0),
+                          known_distance=span * PDF_UNIT_METRES * 50, unit="m")
+    assert typed.metres_per_unit == pytest.approx(clicked.metres_per_unit)
+
+
+def test_typed_scale_survives_a_save_and_reload(tmp_path):
+    from radshield.model.project import Calibration
+
+    project = build_project()
+    project.floor("fl1").calibration = Calibration.from_scale('1/4" = 1\'')
+    path = save(project, tmp_path / "p.rsproj", {"plan.pdf": b"%PDF-1.4 fake"})
+    reloaded, _ = load(path)
+    restored = reloaded.floor("fl1").calibration
+    assert restored.is_typed
+    assert restored.scale_ratio == pytest.approx(48)
+    assert restored.metres_per_unit == pytest.approx(
+        project.floor("fl1").calibration.metres_per_unit
+    )

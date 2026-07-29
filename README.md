@@ -22,7 +22,7 @@ This repository currently contains the calculation core.
 | 7. NCRP 147 CT, DLP and chart methods | **complete** |
 | 8. Formatted report export | not started |
 
-223 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+244 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
 
 ## Install and run
 
@@ -38,20 +38,27 @@ needed for the GUI.
 
 1. **Add floors.** Upload one PDF per floor. Set elevations directly, or enter
    floor-to-floor heights (one per gap, lowest first) and apply them to the stack.
-2. **Set the scale.** Pick the *Set scale* tool and click two points a known
-   distance apart, then type the distance with its unit ("40 ft", "12.5 m").
-   Each floor is calibrated independently, so drawings may be at different scales.
+2. **Set the scale.** Either pick the *Set scale* tool and click two points a
+   known distance apart, typing the distance with its unit ("40 ft", "12.5 m"),
+   or type the drawing scale directly — `1:50`, `1/4" = 1'` and `1 cm = 1 m`
+   all work, written paper:real. Each floor is calibrated independently, so
+   drawings may be at different scales.
 3. **Set an alignment point.** Click the same physical feature — a column, stair
    core, lift shaft — on every floor. Each PDF has its own arbitrary origin, so
    without this, horizontal distances *between* floors are meaningless. The app
-   warns when it is missing.
+   warns when it is missing. Once set, *Show other floors* draws the other
+   storeys' points at their true position on the current view, correcting for
+   both origin and scale.
 4. **Measure anything.** The *Measure* tool reports the distance between any two
    clicked points — a wall standoff, a room width — with a live readout as you
    drag out the second point. Naming a measurement keeps it on the drawing and in
    the saved project; Esc cancels.
 5. **Place points.** Add sources and points of interest, drag to adjust. A new
    point of interest links to every existing source by default; edit the links
-   in the inspector.
+   in the inspector. A source region may run several isotopes — add each with
+   its own activity, patient load and timings, and each decays on its own
+   half-life before the doses are summed. Every source shows its unshielded
+   dose at 1 m, so a mistyped activity is obvious immediately.
 6. **Check the distances.** Each linked source shows its source-to-point distance,
    broken into horizontal and vertical components, before you calculate. Type a
    value into the box to override the drawing geometry — useful when the path is

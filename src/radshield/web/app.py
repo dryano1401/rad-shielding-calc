@@ -22,6 +22,7 @@ from ..engine.evaluate import (
     describe_barriers,
     describe_distances,
     evaluate_project,
+    reference_dose,
     results_to_rows,
 )
 from ..model.geometry import check_project, format_length, measurement_length
@@ -86,6 +87,8 @@ def _project_payload() -> dict[str, Any]:
             f"{stored.plane} view, {len(stored.x_coords)}x{len(stored.y_coords)} grid, "
             f"{cells} cells, {stored.value_unit} per {stored.per}"
         )
+    for raw, stored in zip(data["sources"], session.project.sources):
+        raw["reference_dose"] = reference_dose(session.project, stored)
     data["problems"] = check_project(session.project)
     data["path"] = str(session.path) if session.path else None
     return data
@@ -207,6 +210,12 @@ def update_floor(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         value = payload["calibration"]
         if not value:
             floor.calibration = None
+        elif value.get("scale"):
+            # A scale written down rather than measured off the page.
+            try:
+                floor.calibration = Calibration.from_scale(str(value["scale"]))
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
         else:
             calibration = Calibration(
                 p1=tuple(value["p1"]),
@@ -419,6 +428,35 @@ def set_display_unit(payload: dict[str, str]) -> dict[str, Any]:
     return _project_payload()
 
 
+def _validate_components(params: dict[str, Any]) -> None:
+    """Reject an isotope mix that would fail deep inside the physics."""
+    entries = params.get("components")
+    if not entries:
+        return
+    if not isinstance(entries, list):
+        raise HTTPException(400, "components must be a list of isotopes")
+    known = set(nuclides.available_nuclides())
+    for index, entry in enumerate(entries, start=1):
+        nuclide = entry.get("nuclide", "F-18")
+        if nuclide not in known:
+            raise HTTPException(
+                400, f"isotope {index}: {nuclide!r} is not registered; known: {sorted(known)}"
+            )
+        kind = entry.get("kind", "uptake")
+        if kind not in ("uptake", "imaging"):
+            raise HTTPException(400, f"isotope {index}: kind must be 'uptake' or 'imaging'")
+        duration = "imaging_time_h" if kind == "imaging" else "uptake_time_h"
+        try:
+            if float(entry.get(duration, 0) or 0) <= 0:
+                raise HTTPException(
+                    400, f"isotope {index} ({nuclide}): {duration} must be greater than zero"
+                )
+            if float(entry.get("administered_activity_MBq", 0) or 0) < 0:
+                raise HTTPException(400, f"isotope {index} ({nuclide}): activity cannot be negative")
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"isotope {index} ({nuclide}): {exc}") from exc
+
+
 @app.post("/api/sources")
 def add_source(payload: dict[str, Any]) -> dict[str, Any]:
     """Place a source point."""
@@ -433,6 +471,7 @@ def add_source(payload: dict[str, Any]) -> dict[str, Any]:
         rotation_deg=float(payload.get("rotation_deg", 0.0)),
         params=payload.get("params", {}),
     )
+    _validate_components(source.params)
     session.project.sources.append(source)
     return _project_payload()
 
@@ -451,6 +490,7 @@ def update_source(source_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         if attribute in payload:
             setattr(source, attribute, payload[attribute])
     if "params" in payload:
+        _validate_components(payload["params"])
         source.params = payload["params"]
     return _project_payload()
 

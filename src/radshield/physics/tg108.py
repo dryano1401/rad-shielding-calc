@@ -161,6 +161,51 @@ def weekly_dose(source: PatientSource, distance_m: float) -> DoseResult:
     )
 
 
+@dataclass(frozen=True)
+class CombinedDose:
+    """Summed dose from several radionuclides sharing one location.
+
+    A PET suite rarely runs a single tracer.  Each isotope keeps its own
+    half-life, dose-rate constant, activity and timings, so each gets its own
+    decay factors; only the resulting doses are added.  Averaging the constants
+    instead would be badly wrong, because ``R(t)`` is not linear in half-life
+    and the half-lives in play span three orders of magnitude, from O-15 at two
+    minutes to I-124 at four days.
+
+    All the isotopes concerned emit the same 511 keV annihilation photon, so
+    the barrier attenuates them identically and the summed dose can be solved
+    for a single thickness.
+    """
+
+    weekly_dose_uSv: float
+    per_nuclide: tuple[DoseResult, ...]
+
+    def audit_lines(self) -> list[str]:
+        """Per-isotope breakdown followed by the total."""
+        lines: list[str] = []
+        for dose in self.per_nuclide:
+            lines.extend(dose.audit_lines())
+        lines.append(f"=> combined weekly dose = {self.weekly_dose_uSv:.4g} uSv")
+        return lines
+
+
+def combined_weekly_dose(sources: list[PatientSource], distance_m: float) -> CombinedDose:
+    """Sum the weekly dose from several isotopes at one distance.
+
+    Args:
+        sources: One entry per isotope, each carrying its own activity,
+            patient load and timings.
+        distance_m: Distance from the source region to the point.
+    """
+    if not sources:
+        raise ValueError("at least one isotope is required")
+    doses = tuple(weekly_dose(source, distance_m) for source in sources)
+    return CombinedDose(
+        weekly_dose_uSv=sum(d.weekly_dose_uSv for d in doses),
+        per_nuclide=doses,
+    )
+
+
 def required_transmission(total_weekly_dose_uSv: float, goal: DesignGoal, occupancy: float) -> float:
     """Return the transmission factor B needed to meet ``goal``.
 
