@@ -36,8 +36,9 @@ KNOWN_GAPS = (
     "were captured -- the 100 kVp row and all workload-distribution rows are absent.",
     "Table B.1 occupancy factors were not part of the extraction; the shipped "
     "ncrp147_occupancy.csv is seeded from the published table and marked NEEDS_VERIFICATION.",
-    "Section 5 CT scatter data (isodose maps / DLP scatter fractions) was not extracted; "
-    "CT calculations require caller-supplied scatter parameters.",
+    "CT isodose maps are scanner-specific and are not shipped; the isodose method requires "
+    "caller-supplied values. The DLP method ships kappa and the body factor "
+    "(see ncrp147_ct_scatter.csv).",
 )
 
 

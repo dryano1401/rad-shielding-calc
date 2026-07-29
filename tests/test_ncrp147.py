@@ -214,34 +214,113 @@ def test_wrong_quantity_goal_is_rejected():
         barriers.evaluate(inputs, tg108_goal("uncontrolled"))
 
 
-def test_ct_requires_explicit_scatter_data():
-    """CT scatter constants were not extracted, so they cannot be silently defaulted."""
-    with pytest.raises(ct.MissingScatterDataError):
-        ct.CTScatterModel(method="dlp", source="test")
-    with pytest.raises(ct.MissingScatterDataError):
-        ct.CTScatterModel(method="isodose", source="test")
-    with pytest.raises(ValueError, match="source is required"):
-        ct.CTScatterModel(method="dlp", kappa_mGy_per_mGy_cm=3e-4, source="")
+def test_ct_scatter_defaults_match_ncrp_147():
+    """kappa = 9e-5 /cm for head, 3e-4 /cm for body, with a 1.2 factor on body."""
+    kappa, factor, source = ct.scatter_defaults("head")
+    assert (kappa, factor) == (9e-5, 1.0)
+    assert "NCRP 147" in source
+    kappa, factor, _ = ct.scatter_defaults("body")
+    assert (kappa, factor) == (3e-4, 1.2)
+    with pytest.raises(ct.MissingScatterDataError, match="unknown CT body region"):
+        ct.scatter_defaults("torso")
 
 
-def test_ct_dlp_method():
-    scatter = ct.CTScatterModel(
-        method="dlp",
-        kappa_mGy_per_mGy_cm=3.0e-4,
-        body_region="body",
-        source="placeholder value for test only",
-    )
+def test_ct_body_equation_by_hand():
+    """K_sec = kappa * 1.2 * DLP / d^2 = 3e-4 * 1.2 * 60000 / 4^2 = 1.35 mGy/week."""
     inputs = ct.CTBarrierInputs(
-        scatter=scatter,
+        scatter=ct.CTScatterModel(method="dlp", body_region="body"),
         distance_m=4.0,
         occupancy=1.0,
         procedures_per_week=100,
         dlp_per_procedure_mGy_cm=600,
-        kvp=125,
     )
     result = ct.evaluate(inputs, ncrp147_goal("uncontrolled"))
-    expected = 3.0e-4 * 600 * 100 / 16.0
-    assert result.unshielded_weekly_kerma_mGy == pytest.approx(expected)
     assert result.terms["total weekly DLP (mGy cm)"] == 60000
-    mm = ct.required_thickness(result, "lead")
-    assert mm > 0
+    assert result.terms["kappa (1/cm)"] == 3e-4
+    assert result.terms["body region factor"] == 1.2
+    assert result.unshielded_weekly_kerma_mGy == pytest.approx(1.35)
+    assert result.required_transmission == pytest.approx(0.02 / 1.35)
+
+
+def test_ct_head_equation_by_hand():
+    """K_sec = kappa * DLP / d^2 = 9e-5 * 50000 / 3^2 = 0.5 mGy/week, no 1.2."""
+    inputs = ct.CTBarrierInputs(
+        scatter=ct.CTScatterModel(method="dlp", body_region="head"),
+        distance_m=3.0,
+        occupancy=1.0,
+        procedures_per_week=50,
+        dlp_per_procedure_mGy_cm=1000,
+    )
+    result = ct.evaluate(inputs, ncrp147_goal("uncontrolled"))
+    assert result.terms["head region factor"] == 1.0
+    assert result.unshielded_weekly_kerma_mGy == pytest.approx(0.5)
+
+
+def test_body_scatter_is_four_times_head_per_unit_dlp():
+    """(3e-4 x 1.2) / 9e-5 = 4 exactly, a cheap check the factor is applied."""
+    common = dict(distance_m=3.0, occupancy=1.0, procedures_per_week=10,
+                  dlp_per_procedure_mGy_cm=500)
+    body = ct.evaluate(
+        ct.CTBarrierInputs(scatter=ct.CTScatterModel(method="dlp", body_region="body"), **common),
+        ncrp147_goal("uncontrolled"))
+    head = ct.evaluate(
+        ct.CTBarrierInputs(scatter=ct.CTScatterModel(method="dlp", body_region="head"), **common),
+        ncrp147_goal("uncontrolled"))
+    assert body.unshielded_weekly_kerma_mGy == pytest.approx(
+        4.0 * head.unshielded_weekly_kerma_mGy)
+
+
+def test_omitting_the_body_factor_would_understate_scatter():
+    """Guards the bug this replaced: without 1.2, body kerma is 20% low."""
+    scatter = ct.CTScatterModel(method="dlp", body_region="body")
+    inputs = ct.CTBarrierInputs(scatter=scatter, distance_m=4.0, occupancy=1.0,
+                                procedures_per_week=100, dlp_per_procedure_mGy_cm=600)
+    with_factor = ct.evaluate(inputs, ncrp147_goal("uncontrolled"))
+    without = scatter.kappa_per_cm * 60000 / 16.0
+    assert with_factor.unshielded_weekly_kerma_mGy == pytest.approx(without * 1.2)
+
+
+def test_kappa_can_be_overridden_per_scanner():
+    scatter = ct.CTScatterModel(method="dlp", body_region="body", kappa_per_cm=5e-4,
+                                region_factor=1.0, source="vendor measurement")
+    inputs = ct.CTBarrierInputs(scatter=scatter, distance_m=2.0, occupancy=1.0,
+                                procedures_per_week=10, dlp_per_procedure_mGy_cm=100)
+    result = ct.evaluate(inputs, ncrp147_goal("uncontrolled"))
+    assert result.unshielded_weekly_kerma_mGy == pytest.approx(5e-4 * 1000 / 4.0)
+    assert "vendor measurement" in result.notes[0]
+
+
+def test_dlp_method_needs_a_dlp():
+    with pytest.raises(ct.MissingScatterDataError, match="dlp_per_procedure"):
+        ct.CTBarrierInputs(
+            scatter=ct.CTScatterModel(method="dlp"),
+            distance_m=3.0, occupancy=1.0, procedures_per_week=10,
+        )
+
+
+def test_isodose_method_still_requires_caller_data():
+    """Isodose maps are scanner-specific, so nothing is defaulted."""
+    with pytest.raises(ct.MissingScatterDataError, match="isodose"):
+        ct.CTScatterModel(method="isodose", source="vendor")
+    with pytest.raises(ValueError, match="source is required"):
+        ct.CTScatterModel(method="isodose", isodose_kerma_mGy_at_1m=0.01, source="")
+
+    inputs = ct.CTBarrierInputs(
+        scatter=ct.CTScatterModel(method="isodose", isodose_kerma_mGy_at_1m=0.02,
+                                  source="vendor isodose map"),
+        distance_m=2.0, occupancy=1.0, procedures_per_week=50,
+    )
+    result = ct.evaluate(inputs, ncrp147_goal("uncontrolled"))
+    assert result.unshielded_weekly_kerma_mGy == pytest.approx(0.02 * 50 / 4.0)
+
+
+def test_ct_thickness_uses_the_secondary_fit_at_the_tube_potential():
+    inputs = ct.CTBarrierInputs(
+        scatter=ct.CTScatterModel(method="dlp", body_region="body"),
+        distance_m=3.0, occupancy=1.0, procedures_per_week=100,
+        dlp_per_procedure_mGy_cm=800, kvp=125,
+    )
+    result = ct.evaluate(inputs, ncrp147_goal("uncontrolled"))
+    assert result.shielding_required
+    assert ct.barrier_params(inputs, "lead").unit == "mm"
+    assert ct.required_thickness(result, "lead") > 0

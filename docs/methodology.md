@@ -169,10 +169,33 @@ time. A missing entry never silently falls back to a neighbouring value.
    seeded from the published values and every row is flagged
    `NEEDS_VERIFICATION`. Verify against NCRP 147 Table B.1 before use in a
    report.
-5. **CT scatter data** (Section 5 isodose maps / DLP scatter fractions) was not
-   extracted. `ct.CTScatterModel` therefore *requires* caller-supplied kappa or
-   isodose values and refuses to default them, and requires a `source` string
-   so the audit trail can cite where the number came from.
+5. **CT isodose maps** are scanner-specific and are not shipped. The isodose
+   method requires caller-supplied values and a `source` string. The DLP method
+   ships its constants (below).
+
+### CT secondary barriers, DLP method
+
+Scattered air kerma from the dose-length product, with separate constants by
+body region:
+
+    head:  K_sec = kappa_head * DLP / d^2           kappa_head = 9e-5 cm^-1
+    body:  K_sec = kappa_body * 1.2 * DLP / d^2     kappa_body = 3e-4 cm^-1
+
+The body form carries an additional factor of **1.2**. It is stored and
+reported separately from kappa rather than pre-multiplied into it, so the
+audit trail shows both and a reviewer need not reverse engineer a single
+composite constant.
+
+Units resolve cleanly: kappa is per centimetre and DLP is in mGy cm, so their
+product is the scattered air kerma in mGy at 1 m, which the inverse square
+then carries to the distance of interest. DLP is the weekly total, that is
+the per-procedure DLP times the weekly procedure count.
+
+Per unit DLP the body form is exactly four times the head form
+(3e-4 x 1.2 / 9e-5 = 4), which the test suite uses as a cheap check that the
+1.2 factor has not been dropped. Both kappa and the region factor can be
+overridden per scanner; the shipped values live in
+`physics/data/ncrp147_ct_scatter.csv`.
 
 ### Validation status
 

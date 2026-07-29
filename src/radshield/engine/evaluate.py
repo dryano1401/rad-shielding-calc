@@ -127,9 +127,10 @@ def _ct_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_ct.CT
     p = source.params
     scatter = ncrp_ct.CTScatterModel(
         method=p.get("scatter_method", "dlp"),
-        kappa_mGy_per_mGy_cm=_optional_float(p.get("kappa_mGy_per_mGy_cm")),
-        isodose_kerma_mGy_at_1m=_optional_float(p.get("isodose_kerma_mGy_at_1m")),
         body_region=p.get("body_region", "body"),
+        kappa_per_cm=_optional_float(p.get("kappa_per_cm")),
+        region_factor=_optional_float(p.get("region_factor")),
+        isodose_kerma_mGy_at_1m=_optional_float(p.get("isodose_kerma_mGy_at_1m")),
         source=p.get("scatter_source", ""),
     )
     return ncrp_ct.CTBarrierInputs(

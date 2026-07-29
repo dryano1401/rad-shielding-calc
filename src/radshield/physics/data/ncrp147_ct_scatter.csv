@@ -1,0 +1,3 @@
+body_region,kappa_per_cm,region_factor,source
+head,9e-05,1.0,NCRP 147 CT secondary scatter: K_sec = kappa * DLP / d^2
+body,3e-04,1.2,NCRP 147 CT secondary scatter: K_sec = kappa * 1.2 * DLP / d^2

@@ -956,13 +956,20 @@ function renderSourceInspector(title, box) {
         </select>
       </div>
       ${p.scatter_method === 'isodose'
-        ? `<div class="field">Isodose kerma at 1 m per procedure (mGy)<input type="number" step="0.0001" value="${p.isodose_kerma_mGy_at_1m ?? ''}" data-k="isodose_kerma_mGy_at_1m"></div>`
-        : `<div class="field">κ (mGy per mGy·cm at 1 m)<input type="number" step="0.00001" value="${p.kappa_mGy_per_mGy_cm ?? ''}" data-k="kappa_mGy_per_mGy_cm"></div>
-           <div class="field">DLP per procedure (mGy·cm)<input type="number" value="${p.dlp_per_procedure_mGy_cm ?? ''}" data-k="dlp_per_procedure_mGy_cm"></div>`}
+        ? `<div class="field">Isodose kerma at 1 m per procedure (mGy)<input type="number" step="0.0001" value="${p.isodose_kerma_mGy_at_1m ?? ''}" data-k="isodose_kerma_mGy_at_1m"></div>
+           <div class="field">Source of the scatter data<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
+           <p class="hint">Isodose maps are scanner-specific, so the value and its source must be entered.</p>`
+        : `<div class="field">Body region
+             <select data-k="body_region">
+               <option value="body" ${p.body_region !== 'head' ? 'selected' : ''}>Body (κ = 3×10⁻⁴ /cm, ×1.2)</option>
+               <option value="head" ${p.body_region === 'head' ? 'selected' : ''}>Head (κ = 9×10⁻⁵ /cm)</option>
+             </select>
+           </div>
+           <div class="field">DLP per procedure (mGy·cm)<input type="number" value="${p.dlp_per_procedure_mGy_cm ?? ''}" data-k="dlp_per_procedure_mGy_cm"></div>
+           <div class="field">κ override (1/cm)<input type="number" step="0.00001" placeholder="${p.body_region === 'head' ? '9e-5' : '3e-4'}" value="${p.kappa_per_cm ?? ''}" data-k="kappa_per_cm"></div>
+           <p class="hint">Leave κ blank to use the NCRP 147 value for the selected region.</p>`}
       <div class="field">Procedures per week<input type="number" value="${p.procedures_per_week ?? ''}" data-k="procedures_per_week"></div>
       <div class="field">kVp<input type="number" value="${p.kvp ?? 125}" data-k="kvp"></div>
-      <div class="field">Source of the scatter data<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
-      <p class="hint">CT scatter constants are not shipped — they are scanner-specific. Cite where the value came from; it appears in the audit trail.</p>
     `}
     <button data-act="delete" class="wide">Delete source</button>`;
 

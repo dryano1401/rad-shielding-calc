@@ -13,12 +13,11 @@ mA-min.  NCRP 147 offers two routes:
     Manufacturer-supplied isodose contours, normalised to a reference
     procedure and scaled by the weekly procedure count.
 
-The kappa values and isodose maps were **not** part of the extracted table
-set, and they are scanner- and vendor-specific in the isodose case.  Rather
-than ship guessed constants into a calculation that ends up in a physics
-report, both routes require the caller to supply the scatter data explicitly.
-Once supplied, the transmission and thickness path is identical to every other
-secondary barrier.
+The kappa values and the body factor are shipped in
+``physics/data/ncrp147_ct_scatter.csv`` and are selected by body region.  They
+can still be overridden per scanner.  Isodose maps remain vendor-specific and
+must always be supplied by the caller.  Either way the transmission and
+thickness path is identical to every other secondary barrier.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from ..archer import ArcherParams, thickness as archer_thickness
+from ..data_loader import load_table
 from ..limits import DesignGoal
 from . import tables
 
@@ -34,7 +34,29 @@ CTMethod = Literal["dlp", "isodose"]
 
 
 class MissingScatterDataError(ValueError):
-    """Raised when a CT calculation is attempted without caller-supplied scatter data."""
+    """Raised when a CT calculation is attempted without usable scatter data."""
+
+
+def scatter_defaults(body_region: str) -> tuple[float, float, str]:
+    """Return ``(kappa_per_cm, region_factor, source)`` for a body region.
+
+    The body figure carries NCRP 147's additional factor of 1.2; the head
+    figure does not.  Keeping the factor separate from kappa means the audit
+    trail shows both, rather than a single pre-multiplied constant a reviewer
+    would have to reverse engineer.
+    """
+    region = body_region.strip().lower()
+    for row in load_table("ncrp147_ct_scatter"):
+        if str(row["body_region"]).lower() == region:
+            return (
+                float(row["kappa_per_cm"]),
+                float(row["region_factor"]),
+                str(row["source"]),
+            )
+    available = sorted(str(r["body_region"]) for r in load_table("ncrp147_ct_scatter"))
+    raise MissingScatterDataError(
+        f"unknown CT body region {body_region!r}; known: {available}"
+    )
 
 
 @dataclass(frozen=True)
@@ -43,39 +65,49 @@ class CTScatterModel:
 
     Attributes:
         method: ``"dlp"`` or ``"isodose"``.
-        kappa_mGy_per_mGy_cm: For the DLP method, scattered air kerma at 1 m
-            per unit DLP, in mGy per (mGy cm).  Head and body differ; supply
-            the value matching ``body_region``.
+        body_region: ``"head"`` or ``"body"``.  Selects the shipped kappa and
+            the region factor when they are not given explicitly.
+        kappa_per_cm: Scatter fraction per unit DLP, in cm^-1.  Defaults to the
+            shipped value for ``body_region``: 9e-5 head, 3e-4 body.
+        region_factor: Additional multiplier on the DLP form.  Defaults to 1.2
+            for body and 1.0 for head, per NCRP 147.
         isodose_kerma_mGy_at_1m: For the isodose method, scattered air kerma at
-            1 m for one reference procedure, in mGy.
-        body_region: ``"head"`` or ``"body"``, recorded for the audit trail.
-        source: Citation for the value, e.g. the vendor document or the NCRP
-            147 section it came from.
+            1 m for one reference procedure, in mGy.  Always caller-supplied,
+            since isodose maps are scanner-specific.
+        source: Citation, filled from the shipped table when defaults are used.
     """
 
     method: CTMethod
-    kappa_mGy_per_mGy_cm: float | None = None
-    isodose_kerma_mGy_at_1m: float | None = None
     body_region: str = "body"
+    kappa_per_cm: float | None = None
+    region_factor: float | None = None
+    isodose_kerma_mGy_at_1m: float | None = None
     source: str = ""
 
     def __post_init__(self) -> None:
-        if self.method == "dlp" and self.kappa_mGy_per_mGy_cm is None:
-            raise MissingScatterDataError(
-                "the DLP method requires kappa_mGy_per_mGy_cm. NCRP 147 Section 5 tabulates "
-                "separate head and body values; they were not part of the extracted table set, "
-                "so supply the value from the report or from vendor data."
-            )
-        if self.method == "isodose" and self.isodose_kerma_mGy_at_1m is None:
-            raise MissingScatterDataError(
-                "the isodose method requires isodose_kerma_mGy_at_1m, taken from the "
-                "manufacturer's scatter isodose map for this scanner."
-            )
-        if not self.source:
-            raise ValueError(
-                "CTScatterModel.source is required so the audit trail can cite where the "
-                "scatter data came from"
-            )
+        if self.method == "dlp":
+            default_kappa, default_factor, default_source = scatter_defaults(self.body_region)
+            if self.kappa_per_cm is None:
+                object.__setattr__(self, "kappa_per_cm", default_kappa)
+            if self.region_factor is None:
+                object.__setattr__(self, "region_factor", default_factor)
+            if not self.source:
+                object.__setattr__(self, "source", default_source)
+            if self.kappa_per_cm <= 0:
+                raise ValueError(f"kappa must be positive, got {self.kappa_per_cm}")
+            if self.region_factor <= 0:
+                raise ValueError(f"region factor must be positive, got {self.region_factor}")
+        else:
+            if self.isodose_kerma_mGy_at_1m is None:
+                raise MissingScatterDataError(
+                    "the isodose method requires isodose_kerma_mGy_at_1m, taken from the "
+                    "manufacturer's scatter isodose map for this scanner."
+                )
+            if not self.source:
+                raise ValueError(
+                    "CTScatterModel.source is required for the isodose method so the audit "
+                    "trail can cite which scanner document the value came from"
+                )
 
 
 @dataclass(frozen=True)
@@ -139,9 +171,12 @@ def evaluate(inputs: CTBarrierInputs, goal: DesignGoal) -> CTBarrierResult:
     scatter = inputs.scatter
     if scatter.method == "dlp":
         total_dlp = inputs.dlp_per_procedure_mGy_cm * inputs.procedures_per_week
-        kerma_at_1m = scatter.kappa_mGy_per_mGy_cm * total_dlp
+        # K_sec at 1 m = kappa * region factor * DLP.  The factor is 1.2 for
+        # body and 1.0 for head, so the head form reduces to kappa * DLP.
+        kerma_at_1m = scatter.kappa_per_cm * scatter.region_factor * total_dlp
         terms = {
-            "kappa (mGy per mGy cm at 1 m)": scatter.kappa_mGy_per_mGy_cm,
+            "kappa (1/cm)": scatter.kappa_per_cm,
+            f"{scatter.body_region} region factor": scatter.region_factor,
             "DLP per procedure (mGy cm)": inputs.dlp_per_procedure_mGy_cm,
             "procedures per week": inputs.procedures_per_week,
             "total weekly DLP (mGy cm)": total_dlp,
