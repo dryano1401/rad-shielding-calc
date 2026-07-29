@@ -33,6 +33,7 @@ from ..model.project import (
     Measurement,
     PointOfInterest,
     Project,
+    ScatterMapData,
     SourcePoint,
     Wall,
     new_id,
@@ -40,6 +41,7 @@ from ..model.project import (
 from ..model.store import load as load_project
 from ..model.store import save as save_project
 from ..physics import nuclides
+from ..physics import isodose
 from ..physics.ncrp147 import tables as ncrp_tables
 from . import render
 
@@ -78,6 +80,12 @@ def _project_payload() -> dict[str, Any]:
             else:
                 raw["metres"] = None
                 raw["display"] = "floor not calibrated"
+    for raw, stored in zip(data["scatter_maps"], session.project.scatter_maps):
+        cells = sum(1 for row in stored.values for v in row if v is not None)
+        raw["summary"] = (
+            f"{stored.plane} view, {len(stored.x_coords)}x{len(stored.y_coords)} grid, "
+            f"{cells} cells, {stored.value_unit} per {stored.per}"
+        )
     data["problems"] = check_project(session.project)
     data["path"] = str(session.path) if session.path else None
     return data
@@ -339,6 +347,49 @@ def delete_wall(floor_id: str, wall_id: str) -> dict[str, Any]:
     return _project_payload()
 
 
+@app.post("/api/scatter-maps")
+def add_scatter_map(payload: dict[str, Any]) -> dict[str, Any]:
+    """Import a manufacturer scatter chart pasted as a grid."""
+    try:
+        x_coords, y_coords, values = isodose.parse_grid(payload.get("grid", ""))
+        record = ScatterMapData(
+            id=new_id("map"),
+            name=payload.get("name") or "Scatter chart",
+            plane=payload.get("plane", "plan"),
+            coordinate_unit=payload.get("coordinate_unit", "in"),
+            value_unit=payload.get("value_unit", "mGy"),
+            per=payload.get("per", "procedure"),
+            source=payload.get("source", ""),
+            x_coords=x_coords,
+            y_coords=y_coords,
+            values=values,
+        )
+        # Build it once now so a malformed grid is rejected on import rather
+        # than halfway through a calculation.
+        isodose.build_map(
+            record.name, record.plane, x_coords, y_coords, values,
+            coordinate_unit=record.coordinate_unit, value_unit=record.value_unit,
+        )
+    except isodose.IsodoseError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    session.project.scatter_maps.append(record)
+    return _project_payload()
+
+
+@app.delete("/api/scatter-maps/{map_id}")
+def delete_scatter_map(map_id: str) -> dict[str, Any]:
+    """Remove a scatter chart and unassign it from any source using it."""
+    session.project.scatter_maps = [
+        m for m in session.project.scatter_maps if m.id != map_id
+    ]
+    for source in session.project.sources:
+        for key in ("plan_map_id", "elevation_map_id"):
+            if source.params.get(key) == map_id:
+                source.params[key] = ""
+    return _project_payload()
+
+
 @app.post("/api/project/obliquity")
 def set_obliquity(payload: dict[str, bool]) -> dict[str, Any]:
     """Toggle the obliquity correction for paths crossing barriers at an angle."""
@@ -379,6 +430,7 @@ def add_source(payload: dict[str, Any]) -> dict[str, Any]:
         label=payload.get("label", ""),
         method=payload.get("method", "tg108"),
         height_above_floor_m=float(payload.get("height_above_floor_m", 1.0)),
+        rotation_deg=float(payload.get("rotation_deg", 0.0)),
         params=payload.get("params", {}),
     )
     session.project.sources.append(source)
@@ -392,7 +444,7 @@ def update_source(source_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         source = session.project.source(source_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
-    for attribute in ("x", "y", "height_above_floor_m"):
+    for attribute in ("x", "y", "height_above_floor_m", "rotation_deg"):
         if attribute in payload:
             setattr(source, attribute, float(payload[attribute]))
     for attribute in ("label", "method", "floor_id"):

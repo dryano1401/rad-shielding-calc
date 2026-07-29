@@ -379,6 +379,25 @@ function drawPoints(floor, alpha) {
   for (const source of sources) {
     const p = toScreen(source.x, source.y);
     const on = state.selection?.id === source.id;
+    // Equipment with a scatter chart is directional, so show which way its
+    // chart is pointing: the arrow is the chart's +y, usually the table axis.
+    if (source.method === 'ncrp147_ct' && source.params?.scatter_method === 'chart') {
+      const angle = -(source.rotation_deg || 0) * Math.PI / 180;
+      const length = 34;
+      const ax = p.x - Math.sin(angle) * length;
+      const ay = p.y - Math.cos(angle) * length;
+      ctx.save();
+      ctx.strokeStyle = '#ff8a3d';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(ax, ay);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(ax, ay, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
     ctx.fillStyle = '#ff8a3d';
     ctx.beginPath();
     ctx.moveTo(p.x, p.y - 8);
@@ -674,6 +693,7 @@ function renderAll() {
   renderFloors();
   renderFloorSelect();
   renderWalls();
+  renderScatterMaps();
   renderMeasurements();
   renderMaterials();
   renderPointList();
@@ -731,6 +751,24 @@ function renderWalls() {
   }
   if (!floor?.walls?.length) {
     list.innerHTML = '<p class="hint">No walls on this floor yet.</p>';
+  }
+}
+
+function renderScatterMaps() {
+  const list = document.getElementById('map-list');
+  list.innerHTML = '';
+  for (const map of (state.project.scatter_maps || [])) {
+    const div = document.createElement('div');
+    div.className = 'map-item';
+    div.innerHTML = `<div class="top"><span class="name">${escapeHtml(map.name)}</span>
+      <button title="Delete chart">×</button></div>
+      <div class="detail">${escapeHtml(map.summary || '')}</div>`;
+    div.querySelector('button').onclick = async () =>
+      setProject(await api(`/api/scatter-maps/${map.id}`, { method: 'DELETE' }));
+    list.appendChild(div);
+  }
+  if (!state.project.scatter_maps?.length) {
+    list.innerHTML = '<p class="hint">No charts imported.</p>';
   }
 }
 
@@ -951,11 +989,33 @@ function renderSourceInspector(title, box) {
     ` : `
       <div class="field">Scatter method
         <select data-k="scatter_method">
-          <option value="dlp" ${p.scatter_method !== 'isodose' ? 'selected' : ''}>DLP × κ</option>
-          <option value="isodose" ${p.scatter_method === 'isodose' ? 'selected' : ''}>Vendor isodose</option>
+          <option value="dlp" ${!p.scatter_method || p.scatter_method === 'dlp' ? 'selected' : ''}>DLP × κ</option>
+          <option value="chart" ${p.scatter_method === 'chart' ? 'selected' : ''}>Manufacturer scatter chart</option>
+          <option value="isodose" ${p.scatter_method === 'isodose' ? 'selected' : ''}>Single isodose value</option>
         </select>
       </div>
-      ${p.scatter_method === 'isodose'
+      ${p.scatter_method === 'chart'
+        ? `<div class="field">Plan chart
+             <select data-k="plan_map_id">
+               <option value="">none</option>
+               ${(state.project.scatter_maps || []).filter(m => m.plane === 'plan').map(m =>
+                 `<option value="${m.id}" ${p.plan_map_id === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+             </select>
+           </div>
+           <div class="field">Elevation chart (used across floors)
+             <select data-k="elevation_map_id">
+               <option value="">none</option>
+               ${(state.project.scatter_maps || []).filter(m => m.plane === 'elevation').map(m =>
+                 `<option value="${m.id}" ${p.elevation_map_id === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+             </select>
+           </div>
+           <div class="field">Rotation on the plan (degrees)
+             <input type="number" step="5" value="${source.rotation_deg || 0}" data-p="rotation_deg">
+           </div>
+           <p class="hint">The placed point is the <em>isocentre</em>. The orange arrow shows
+             the chart's +y axis — usually the table. Rotate until it matches the drawing.</p>
+           <div class="field">Source of the chart<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>`
+        : p.scatter_method === 'isodose'
         ? `<div class="field">Isodose kerma at 1 m per procedure (mGy)<input type="number" step="0.0001" value="${p.isodose_kerma_mGy_at_1m ?? ''}" data-k="isodose_kerma_mGy_at_1m"></div>
            <div class="field">Source of the scatter data<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
            <p class="hint">Isodose maps are scanner-specific, so the value and its source must be entered.</p>`
@@ -1274,6 +1334,28 @@ document.getElementById('obliquity').onchange = async event => {
   if (state.results) calculate();
 };
 document.getElementById('btn-calculate').onclick = () => calculate().catch(e => alert(e.message));
+
+const mapDialog = document.getElementById('map-dialog');
+document.getElementById('btn-add-map').onclick = () => mapDialog.showModal();
+document.getElementById('map-import').onclick = async event => {
+  const grid = document.getElementById('map-grid').value;
+  if (!grid.trim()) return;
+  event.preventDefault();
+  try {
+    setProject(await send('/api/scatter-maps', 'POST', {
+      name: document.getElementById('map-name').value,
+      plane: document.getElementById('map-plane').value,
+      coordinate_unit: document.getElementById('map-coord-unit').value,
+      value_unit: document.getElementById('map-value-unit').value,
+      per: document.getElementById('map-per').value,
+      source: document.getElementById('map-source').value,
+      grid,
+    }));
+    document.getElementById('map-grid').value = '';
+    document.getElementById('map-name').value = '';
+    mapDialog.close();
+  } catch (error) { alert(error.message); }
+};
 
 document.getElementById('btn-add-floor').onclick = () => document.getElementById('pdf-file').click();
 document.getElementById('pdf-file').onchange = async event => {

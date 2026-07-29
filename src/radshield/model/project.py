@@ -76,6 +76,36 @@ class Calibration:
 
 
 @dataclass
+class ScatterMapData:
+    """A manufacturer scatter chart as published, stored verbatim.
+
+    The grid is kept in the units it was read in rather than converted on
+    import, so the saved project shows the same numbers as the vendor page and
+    a reviewer can check them cell by cell.
+
+    Attributes:
+        plane: ``"plan"`` for the view looking down, ``"elevation"`` for the
+            side view.
+        x_coords: Column offsets from the isocentre.
+        y_coords: Row offsets from the isocentre.  On an elevation chart this
+            is height above the isocentre.
+        values: ``values[row][column]``; None for blank or "NA" cells.
+        per: What each value is per, e.g. ``"procedure"``.
+    """
+
+    id: str
+    name: str
+    plane: str = "plan"
+    coordinate_unit: str = "in"
+    value_unit: str = "mGy"
+    per: str = "procedure"
+    source: str = ""
+    x_coords: list[float] = field(default_factory=list)
+    y_coords: list[float] = field(default_factory=list)
+    values: list[list[float | None]] = field(default_factory=list)
+
+
+@dataclass
 class Barrier:
     """A shielding barrier declared by name rather than drawn on the plan.
 
@@ -187,6 +217,11 @@ class SourcePoint:
 
     ``params`` holds method-specific inputs; its keys mirror the argument
     names of the corresponding physics dataclass.
+
+    For equipment with a scatter chart, the placed point is the **isocentre**
+    and ``rotation_deg`` orients the chart on the plan: it is the angle the
+    chart's +x axis makes with east, measured anticlockwise, so 0 leaves the
+    chart's +y (usually the table axis) pointing up the page.
     """
 
     id: str
@@ -196,6 +231,7 @@ class SourcePoint:
     label: str = ""
     method: Method = "tg108"
     height_above_floor_m: float = 1.0
+    rotation_deg: float = 0.0
     params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -267,6 +303,7 @@ class Project:
     sources: list[SourcePoint] = field(default_factory=list)
     pois: list[PointOfInterest] = field(default_factory=list)
     materials: list[str] = field(default_factory=lambda: ["lead", "concrete"])
+    scatter_maps: list[ScatterMapData] = field(default_factory=list)
     display_unit: str = "ft"
     apply_obliquity: bool = False
     schema_version: int = 1
@@ -284,6 +321,13 @@ class Project:
             if s.id == source_id:
                 return s
         raise KeyError(f"no source {source_id!r}")
+
+    def scatter_map(self, map_id: str) -> ScatterMapData:
+        """Return a stored scatter chart by id."""
+        for m in self.scatter_maps:
+            if m.id == map_id:
+                return m
+        raise KeyError(f"no scatter map {map_id!r}")
 
     def poi(self, poi_id: str) -> PointOfInterest:
         """Return a point of interest by id."""
@@ -400,6 +444,7 @@ class Project:
             sources=[SourcePoint(**raw) for raw in data.get("sources", [])],
             pois=[_poi_from_dict(raw) for raw in data.get("pois", [])],
             materials=data.get("materials", ["lead", "concrete"]),
+            scatter_maps=[ScatterMapData(**raw) for raw in data.get("scatter_maps", [])],
             display_unit=data.get("display_unit", "ft"),
             apply_obliquity=data.get("apply_obliquity", False),
             schema_version=1,

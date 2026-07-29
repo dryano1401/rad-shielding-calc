@@ -13,9 +13,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..model.geometry import Crossing, Distance, distance, format_length, path_barriers
+from ..model.geometry import (
+    Crossing,
+    Distance,
+    chart_direction,
+    distance,
+    format_length,
+    path_barriers,
+)
 from ..model.project import PointOfInterest, Project, SourcePoint
-from ..physics import nuclides, tg108
+from ..physics import isodose, nuclides, tg108
 from ..physics.archer import equivalent_thickness as archer_equivalent
 from ..physics.archer import thickness as archer_thickness
 from ..physics.archer import transmission as archer_transmission
@@ -138,10 +145,80 @@ def _ct_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_ct.CT
         distance_m=dist,
         occupancy=occupancy,
         procedures_per_week=float(p.get("procedures_per_week", 0.0)),
-        dlp_per_procedure_mGy_cm=_optional_float(p.get("dlp_per_procedure_mGy_cm")),
+        dlp_per_procedure_mGy_cm=_optional_float(p.get("dlp_per_procedure_mGy_cm"))
+        if scatter.method == "dlp"
+        else None,
         kvp=float(p.get("kvp", 125)),
         label=source.label or source.id,
     )
+
+
+def _scatter_map(project: Project, map_id: str) -> isodose.ScatterMap:
+    """Build a usable scatter map from the project's stored grid."""
+    stored = project.scatter_map(map_id)
+    return isodose.build_map(
+        name=stored.name,
+        plane=stored.plane,
+        x_coords=stored.x_coords,
+        y_coords=stored.y_coords,
+        values=stored.values,
+        coordinate_unit=stored.coordinate_unit,
+        value_unit=stored.value_unit,
+        per=stored.per,
+        source=stored.source,
+    )
+
+
+def _read_chart(
+    project: Project, source: SourcePoint, poi: PointOfInterest, distance_m: float
+) -> tuple[float, tuple[str, ...]]:
+    """Sample the source's scatter chart at a point.
+
+    An elevation chart is preferred when the point is on another floor, since
+    that is the view describing what leaves the gantry vertically. Otherwise
+    the plan chart is used.
+
+    Only the *bearing* comes from the placed geometry.  The distance is passed
+    in, so the inverse-square correction uses the same figure as the rest of
+    the calculation -- including the NCRP standoff and any entered override.
+    Deriving it separately here would let the audit trail quote one distance
+    while the arithmetic used another.
+
+    Returns:
+        ``(kerma per procedure at the point in mGy, notes)``.
+    """
+    params = source.params
+    plan_id = params.get("plan_map_id") or ""
+    elevation_id = params.get("elevation_map_id") or ""
+
+    cross_floor = source.floor_id != poi.floor_id
+    map_id = elevation_id if (cross_floor and elevation_id) else plan_id
+    plane = "elevation" if map_id == elevation_id and elevation_id else "plan"
+    if not map_id:
+        raise ValueError(
+            "this CT source uses the manufacturer chart method but no chart is assigned"
+        )
+
+    scatter_map = _scatter_map(project, map_id)
+    direction = chart_direction(project, source, poi, plane=plane)
+    reading = isodose.sample(scatter_map, direction.bearing_deg, distance_m)
+
+    notes = (
+        f"{scatter_map.name} ({plane} view), {direction.note}",
+        reading.describe(),
+    ) + reading.notes
+    if abs(distance_m - direction.distance_m) > 1e-6:
+        notes += (
+            f"chart read at {distance_m:.2f} m, the distance used throughout this "
+            f"calculation, rather than the {direction.distance_m:.2f} m straight from "
+            "the placed points",
+        )
+    if cross_floor and not elevation_id:
+        notes += (
+            "no elevation chart assigned, so the plan chart was used for a point on "
+            "another floor; the bearing ignores the vertical component",
+        )
+    return reading.value_mGy, notes
 
 
 def _optional_float(value: Any) -> float | None:
@@ -321,7 +398,11 @@ def _solve_ncrp147(
         is_ct = src.method == "ncrp147_ct"
         if is_ct:
             inputs = _ct_inputs(src, dist.metres, poi.occupancy)
-            res = ncrp_ct.evaluate(inputs, goal)
+            if inputs.scatter.method == "chart":
+                kerma, chart_notes = _read_chart(project, src, poi, dist.metres)
+                res = ncrp_ct.evaluate_from_chart(inputs, goal, kerma, chart_notes)
+            else:
+                res = ncrp_ct.evaluate(inputs, goal)
             params_for = lambda material, i=inputs: ncrp_ct.barrier_params(i, material)
         else:
             inputs = _ncrp_inputs(src, dist.metres, poi.occupancy)

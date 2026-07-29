@@ -412,6 +412,79 @@ def path_barriers(
     return crossings, warnings
 
 
+@dataclass
+class ChartDirection:
+    """Where a point lies relative to a source's scatter chart."""
+
+    bearing_deg: float
+    distance_m: float
+    plane: str
+    note: str = ""
+
+
+def chart_direction(
+    project: Project,
+    source: SourcePoint,
+    poi: PointOfInterest,
+    plane: str = "plan",
+) -> ChartDirection:
+    """Bearing and distance from a source's isocentre to a point, in chart axes.
+
+    The placed source point is the isocentre.  ``source.rotation_deg`` turns
+    the chart's axes to match how the equipment sits on the plan.
+
+    For a ``"plan"`` chart the bearing is measured in the horizontal plane,
+    anticlockwise from the chart's +x axis.  For an ``"elevation"`` chart the
+    chart's x axis is the table axis and its y axis is height, so the bearing
+    is the angle above or below the isocentre plane, measured in the vertical
+    plane that contains the table axis.
+
+    The distance returned is always the true three-dimensional separation,
+    since that is what the inverse-square correction must use.
+    """
+    source_floor = project.floor(source.floor_id)
+    poi_floor = project.floor(poi.floor_id)
+
+    sx, sy, _ = floor_offset_m(source_floor, source.x, source.y)
+    px, py, _ = floor_offset_m(poi_floor, poi.x, poi.y)
+    east, north = px - sx, py - sy
+
+    poi_height, _ = target_height(source_floor, poi_floor, poi)
+    rise = (poi_floor.elevation_m + poi_height) - (
+        source_floor.elevation_m + source.height_above_floor_m
+    )
+
+    # Rotate the horizontal offset into the chart's frame.
+    angle = math.radians(source.rotation_deg)
+    local_x = east * math.cos(angle) + north * math.sin(angle)
+    local_y = -east * math.sin(angle) + north * math.cos(angle)
+
+    distance = math.sqrt(east**2 + north**2 + rise**2)
+    if distance <= 0:
+        raise GeometryError(
+            f"{poi.label or poi.id!r} is at the isocentre of "
+            f"{source.label or source.id!r}; move one of them"
+        )
+
+    if plane == "elevation":
+        # The elevation chart runs along the table axis, which is the plan
+        # chart's +y, so that component becomes the chart's horizontal axis.
+        along = local_y
+        bearing = math.degrees(math.atan2(rise, along))
+        note = (
+            f"elevation chart: {along:+.2f} m along the table axis, {rise:+.2f} m in height"
+        )
+    else:
+        bearing = math.degrees(math.atan2(local_y, local_x))
+        note = f"plan chart: {local_x:+.2f}, {local_y:+.2f} m from the isocentre"
+        if abs(rise) > 0.5:
+            note += f", {rise:+.2f} m in height (plan chart used for the bearing)"
+
+    return ChartDirection(
+        bearing_deg=bearing, distance_m=distance, plane=plane, note=note
+    )
+
+
 def check_project(project: Project) -> list[str]:
     """Return a list of problems that would block or degrade a calculation."""
     problems: list[str] = []

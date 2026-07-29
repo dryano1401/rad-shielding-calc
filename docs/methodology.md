@@ -197,6 +197,47 @@ Per unit DLP the body form is exactly four times the head form
 overridden per scanner; the shipped values live in
 `physics/data/ncrp147_ct_scatter.csv`.
 
+### CT secondary barriers, manufacturer scatter charts
+
+Vendors publish scatter as a grid of air kerma on a plane through the
+isocentre: a plan view looking down, and an elevation view from the side.
+Read directly, such a chart only gives values at the printed grid points, so
+each cell is first normalised to
+
+    S = K * r^2
+
+the scatter strength on that bearing, which is independent of distance. The
+value at an arbitrary point is then ``K = S / d^2``.
+
+That premise is not assumed, it is checked. On the chart used to develop this,
+along the table axis, ``S`` is 0.1895, 0.1953, 0.1960, 0.1878 and 0.1937
+mGy m^2 at 0.5, 1.0, 1.5, 2.0 and 2.5 m -- constant to within 5% over a
+five-fold change in distance. A test pins that spread, so a mistranscribed
+chart shows up as a physical inconsistency rather than a plausible number.
+
+**Geometry.** The placed source point is the isocentre. Each source carries a
+rotation, being the angle its chart's +x axis makes with east, so the chart
+can be turned to match how the equipment sits on the drawing. The bearing from
+isocentre to the protected point is computed in the chart's own frame; the
+distance used for the inverse square is the same one the rest of the
+calculation uses, including the NCRP standoff and any entered override.
+
+**Choosing a cell.** Where several cells share a bearing, the one with the
+largest ``S`` is used, not the one nearest in radius. Charts contain shadowed
+cells -- the pedestal column on a typical plan view reads an order of
+magnitude below its neighbours -- and selecting by radius makes the answer
+fall tenfold as the protected point moves a few centimetres further out, in
+the unsafe direction. A wall is wide and such shadows are narrow, so the
+unshadowed envelope is both conservative and what a physicist reading the
+printed chart would take. Where the cells on a bearing disagree by more than a
+factor of two, that is reported.
+
+**Plan against elevation.** A point on another floor is read from the
+elevation chart when one is assigned, since that is the view describing what
+leaves the gantry vertically. Falling back to the plan chart for such a point
+is allowed but noted, because the plan bearing ignores the vertical
+component.
+
 ### Validation status
 
 The extracted set contains no worked examples, so the NCRP 147 tests verify

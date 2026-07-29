@@ -188,3 +188,25 @@ details pre { white-space: pre-wrap; color: var(--muted); font-size: 11px; margi
 .barrier.manual { border-left-color: var(--accent); }
 .barrier .oblique { color: var(--warn); }
 .no-barrier { color: var(--muted); font-size: 11.5px; font-style: italic; margin-top: 4px; }
+
+dialog {
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 16px; width: min(680px, 92vw);
+}
+dialog::backdrop { background: rgba(0, 0, 0, .6); }
+dialog h2 { margin-bottom: 10px; }
+dialog textarea {
+  width: 100%; margin-top: 6px; font: 12px/1.4 ui-monospace, monospace;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 5px; padding: 8px;
+}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+.map-item {
+  border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2);
+  padding: 6px 7px; margin-bottom: 5px;
+}
+.map-item .top { display: flex; align-items: center; gap: 6px; }
+.map-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-item .detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; }

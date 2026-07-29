@@ -30,7 +30,7 @@ from ..data_loader import load_table
 from ..limits import DesignGoal
 from . import tables
 
-CTMethod = Literal["dlp", "isodose"]
+CTMethod = Literal["dlp", "isodose", "chart"]
 
 
 class MissingScatterDataError(ValueError):
@@ -97,6 +97,12 @@ class CTScatterModel:
                 raise ValueError(f"kappa must be positive, got {self.kappa_per_cm}")
             if self.region_factor <= 0:
                 raise ValueError(f"region factor must be positive, got {self.region_factor}")
+        elif self.method == "chart":
+            if not self.source:
+                raise ValueError(
+                    "CTScatterModel.source is required for the chart method so the audit "
+                    "trail can cite which manufacturer document the chart came from"
+                )
         else:
             if self.isodose_kerma_mGy_at_1m is None:
                 raise MissingScatterDataError(
@@ -205,6 +211,48 @@ def evaluate(inputs: CTBarrierInputs, goal: DesignGoal) -> CTBarrierResult:
             f"scatter model: {scatter.method}, {scatter.body_region}, source: {scatter.source}",
             f"secondary transmission taken at {inputs.kvp:g} kVp (Table C.1)",
         ),
+    )
+
+
+def evaluate_from_chart(
+    inputs: CTBarrierInputs,
+    goal: DesignGoal,
+    kerma_per_procedure_mGy: float,
+    chart_notes: tuple[str, ...] = (),
+) -> CTBarrierResult:
+    """Barrier requirement from a scatter chart already read at the point.
+
+    :mod:`radshield.physics.isodose` handles the direction lookup and the
+    inverse-square correction, because those depend on where the point sits
+    relative to the isocentre.  What arrives here is the per-procedure air
+    kerma *at the point*, so no further distance correction is applied.
+    """
+    if goal.quantity != "air_kerma":
+        raise ValueError(f"NCRP 147 requires an air-kerma design goal, got {goal.quantity!r}")
+    if kerma_per_procedure_mGy < 0:
+        raise ValueError("chart kerma cannot be negative")
+
+    kerma = kerma_per_procedure_mGy * inputs.procedures_per_week
+    terms = {
+        "chart kerma at the point (mGy per procedure)": kerma_per_procedure_mGy,
+        "procedures per week": inputs.procedures_per_week,
+        "distance d (m)": inputs.distance_m,
+        "occupancy T": inputs.occupancy,
+        "design goal P (mGy/week)": goal.value,
+    }
+    b = float("inf") if kerma <= 0 else goal.value / (inputs.occupancy * kerma)
+
+    return CTBarrierResult(
+        unshielded_weekly_kerma_mGy=kerma,
+        required_transmission=b,
+        inputs=inputs,
+        goal=goal,
+        terms=terms,
+        notes=(
+            f"scatter model: manufacturer chart, source: {inputs.scatter.source}",
+            f"secondary transmission taken at {inputs.kvp:g} kVp (Table C.1)",
+        )
+        + chart_notes,
     )
 
 

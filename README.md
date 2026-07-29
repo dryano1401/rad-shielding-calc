@@ -19,10 +19,10 @@ This repository currently contains the calculation core.
 | 4. Multi-floor 3D geometry | **complete** |
 | 5. Results, audit trail, CSV export | **complete** |
 | 6. Wall barriers and path attenuation | **complete** |
-| 7. NCRP 147 CT, DLP method | **complete** |
+| 7. NCRP 147 CT, DLP and chart methods | **complete** |
 | 8. Formatted report export | not started |
 
-185 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
+209 tests passing, including TG-108 Examples 1-6 and Tables IV, VII and VIII.
 
 ## Install and run
 

@@ -57,6 +57,13 @@
       <div id="wall-list"></div>
     </section>
 
+    <section>
+      <h2>Scatter charts</h2>
+      <p class="hint">Manufacturer isodose grids, pasted from the vendor page.</p>
+      <div id="map-list"></div>
+      <button id="btn-add-map" class="wide">Import chart…</button>
+    </section>
+
     <section id="measure-box" hidden>
       <h2>Measurements</h2>
       <p class="hint">Distances taken off the current drawing. Saved with the project.</p>
@@ -120,6 +127,54 @@
   </div>
   <div id="results"></div>
 </section>
+
+<dialog id="map-dialog">
+  <form method="dialog">
+    <h2>Import a manufacturer scatter chart</h2>
+    <div class="row">
+      <label>Name<input id="map-name" type="text" placeholder="Revolution CT — plan view"></label>
+    </div>
+    <div class="row">
+      <label>View
+        <select id="map-plane">
+          <option value="plan">Plan (looking down)</option>
+          <option value="elevation">Elevation (from the side)</option>
+        </select>
+      </label>
+      <label>Grid units
+        <select id="map-coord-unit">
+          <option value="in">inches</option><option value="cm">cm</option>
+          <option value="mm">mm</option><option value="m">m</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Value units
+        <select id="map-value-unit">
+          <option value="mGy">mGy</option><option value="uGy">µGy</option>
+        </select>
+      </label>
+      <label>Each value is per
+        <select id="map-per">
+          <option value="procedure">procedure</option>
+          <option value="scan">scan</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Source / citation<input id="map-source" type="text" placeholder="vendor document"></label>
+    </div>
+    <p class="hint">Paste the grid: a header row of column offsets, then one row per
+      row-offset starting with that offset. Tabs, commas or spaces. Blank or NA for
+      masked cells.</p>
+    <textarea id="map-grid" rows="12" spellcheck="false"
+      placeholder="&#9;-19.7&#9;0&#9;19.7&#10;19.7&#9;0.370&#9;0.757&#9;0.381&#10;39.4&#9;0.149&#9;0.195&#9;0.157"></textarea>
+    <div class="dialog-actions">
+      <button value="cancel">Cancel</button>
+      <button id="map-import" value="import">Import</button>
+    </div>
+  </form>
+</dialog>
 
 <script src="/static/app.js"></script>
 </body>
