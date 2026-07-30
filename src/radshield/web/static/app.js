@@ -481,11 +481,31 @@ function drawPoints(floor, alpha, transform) {
   for (const poi of pois) {
     const p = place(poi.x, poi.y);
     const on = state.selection?.id === poi.id;
-    ctx.fillStyle = '#40d0a0';
+    const half = 7;
+    ctx.save();
+    ctx.lineCap = 'round';
+    // An X's crossing point pins down a single pixel exactly, unlike a
+    // circle's fill, which makes it easier to line up precisely with a
+    // wall or corner on the drawing underneath.
+    if (on) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(p.x - half, p.y - half);
+      ctx.lineTo(p.x + half, p.y + half);
+      ctx.moveTo(p.x + half, p.y - half);
+      ctx.lineTo(p.x - half, p.y + half);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = '#40d0a0';
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
-    ctx.fill();
-    if (on) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+    ctx.moveTo(p.x - half, p.y - half);
+    ctx.lineTo(p.x + half, p.y + half);
+    ctx.moveTo(p.x + half, p.y - half);
+    ctx.lineTo(p.x - half, p.y + half);
+    ctx.stroke();
+    ctx.restore();
     label(p.x + 11, p.y + 4,
           alpha < 1 ? `${poi.label || 'point'} · ${floor.name}` : (poi.label || 'point'),
           '#8fe6c8', alpha);
