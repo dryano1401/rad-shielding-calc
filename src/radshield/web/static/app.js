@@ -1575,11 +1575,129 @@ document.getElementById('obliquity').onchange = async event => {
 };
 document.getElementById('btn-calculate').onclick = () => calculate().catch(e => alert(e.message));
 
+/* Scatter-chart import: a paste-able grid of cells rather than raw text, so
+ * pasting straight from Excel/Sheets lines up into visible rows and columns
+ * that can be checked (and touched up) before import. It still serializes to
+ * the same tab-separated grid text the API has always accepted. */
+
+function mapMakeCell(r, c, cls) {
+  const td = document.createElement('td');
+  if (cls) td.className = cls;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.spellcheck = false;
+  input.dataset.r = r;
+  input.dataset.c = c;
+  input.addEventListener('paste', onMapCellPaste);
+  td.appendChild(input);
+  return td;
+}
+
+function buildMapTable(nRows, nCols) {
+  const table = document.getElementById('map-table');
+  table.innerHTML = '';
+  const header = document.createElement('tr');
+  header.appendChild(mapMakeCell(0, 0, 'corner'));
+  for (let c = 1; c <= nCols; c++) header.appendChild(mapMakeCell(0, c, 'header'));
+  table.appendChild(header);
+  for (let r = 1; r <= nRows; r++) {
+    const tr = document.createElement('tr');
+    tr.appendChild(mapMakeCell(r, 0, 'rowhead'));
+    for (let c = 1; c <= nCols; c++) tr.appendChild(mapMakeCell(r, c, ''));
+    table.appendChild(tr);
+  }
+}
+
+function mapTableDims() {
+  const table = document.getElementById('map-table');
+  return {
+    rows: Math.max(table.rows.length - 1, 0),
+    cols: table.rows[0] ? table.rows[0].cells.length - 1 : 0,
+  };
+}
+
+function mapCell(r, c) {
+  const table = document.getElementById('map-table');
+  const row = table.rows[r];
+  const cell = row && row.cells[c];
+  return cell ? cell.querySelector('input') : null;
+}
+
+function mapTableEnsureSize(rows, cols) {
+  const table = document.getElementById('map-table');
+  const dims = mapTableDims();
+  if (cols > dims.cols) {
+    for (let r = 0; r < table.rows.length; r++) {
+      const row = table.rows[r];
+      for (let c = dims.cols + 1; c <= cols; c++) row.appendChild(mapMakeCell(r, c, r === 0 ? 'header' : ''));
+    }
+  }
+  const curCols = Math.max(cols, dims.cols);
+  if (rows > dims.rows) {
+    for (let r = dims.rows + 1; r <= rows; r++) {
+      const tr = document.createElement('tr');
+      tr.appendChild(mapMakeCell(r, 0, 'rowhead'));
+      for (let c = 1; c <= curCols; c++) tr.appendChild(mapMakeCell(r, c, ''));
+      table.appendChild(tr);
+    }
+  }
+}
+
+// Mirrors the server's parse_grid(): tabs first, then commas, then runs of
+// whitespace, so a paste from any spreadsheet's clipboard format lines up.
+function mapSplitPasted(text) {
+  return text.replace(/\r/g, '').split('\n').filter(line => line.length).map(line =>
+    line.includes('\t') ? line.split('\t')
+      : line.includes(',') ? line.split(',')
+      : line.trim().split(/\s+/));
+}
+
+function onMapCellPaste(event) {
+  const text = (event.clipboardData || window.clipboardData).getData('text');
+  // A single value pastes into just this cell the normal way.
+  if (!text || !/[\t\n,]/.test(text)) return;
+  event.preventDefault();
+  const startR = Number(event.target.dataset.r);
+  const startC = Number(event.target.dataset.c);
+  const grid = mapSplitPasted(text);
+  mapTableEnsureSize(startR + grid.length - 1, startC + Math.max(...grid.map(row => row.length)) - 1);
+  grid.forEach((line, ri) => line.forEach((value, ci) => {
+    const input = mapCell(startR + ri, startC + ci);
+    if (input) input.value = value.trim();
+  }));
+}
+
+function mapTableToGridText() {
+  const dims = mapTableDims();
+  // The table is grown in round steps (e.g. 4x4), so whatever wasn't pasted
+  // or typed into is trailing filler, not data — every kept header cell has
+  // to be a real offset and every kept row has to start with one, so those
+  // trailing blanks must be trimmed rather than serialized as-is.
+  let usedCols = dims.cols;
+  while (usedCols > 0 && !mapCell(0, usedCols).value.trim()) usedCols--;
+  const rowIsEmpty = r => {
+    if (mapCell(r, 0).value.trim()) return false;
+    for (let c = 1; c <= usedCols; c++) if (mapCell(r, c).value.trim()) return false;
+    return true;
+  };
+  let usedRows = dims.rows;
+  while (usedRows > 0 && rowIsEmpty(usedRows)) usedRows--;
+
+  const lines = [['', ...Array.from({ length: usedCols }, (_, i) => mapCell(0, i + 1).value.trim())].join('\t')];
+  for (let r = 1; r <= usedRows; r++) {
+    const line = [mapCell(r, 0).value.trim()];
+    for (let c = 1; c <= usedCols; c++) line.push(mapCell(r, c).value.trim());
+    lines.push(line.join('\t'));
+  }
+  return lines.join('\n');
+}
+
 const mapDialog = document.getElementById('map-dialog');
-document.getElementById('btn-add-map').onclick = () => mapDialog.showModal();
+document.getElementById('btn-add-map').onclick = () => { buildMapTable(4, 4); mapDialog.showModal(); };
+document.getElementById('map-add-col').onclick = () => { const d = mapTableDims(); mapTableEnsureSize(d.rows, d.cols + 1); };
+document.getElementById('map-add-row').onclick = () => { const d = mapTableDims(); mapTableEnsureSize(d.rows + 1, d.cols); };
+document.getElementById('map-clear').onclick = () => buildMapTable(4, 4);
 document.getElementById('map-import').onclick = async event => {
-  const grid = document.getElementById('map-grid').value;
-  if (!grid.trim()) return;
   event.preventDefault();
   try {
     setProject(await send('/api/scatter-maps', 'POST', {
@@ -1589,10 +1707,10 @@ document.getElementById('map-import').onclick = async event => {
       value_unit: document.getElementById('map-value-unit').value,
       per: document.getElementById('map-per').value,
       source: document.getElementById('map-source').value,
-      grid,
+      grid: mapTableToGridText(),
     }));
-    document.getElementById('map-grid').value = '';
     document.getElementById('map-name').value = '';
+    buildMapTable(4, 4);
     mapDialog.close();
   } catch (error) { alert(error.message); }
 };

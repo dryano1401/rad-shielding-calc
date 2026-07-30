@@ -203,6 +203,18 @@ dialog textarea {
 }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 
+#map-table-wrap { max-height: 340px; overflow: auto; margin-top: 6px; border: 1px solid var(--line); border-radius: 5px; }
+#map-table { border-collapse: collapse; }
+#map-table td { padding: 0; border: 1px solid var(--line); }
+#map-table input {
+  width: 68px; box-sizing: border-box; padding: 4px 5px;
+  font: 12px ui-monospace, monospace; text-align: right;
+  background: var(--panel-2); color: var(--text); border: none;
+}
+#map-table input:focus { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--panel); }
+#map-table td.corner { background: var(--panel); }
+#map-table td.header input, #map-table td.rowhead input { text-align: center; color: var(--muted); }
+
 .map-item {
   border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2);
   padding: 6px 7px; margin-bottom: 5px;

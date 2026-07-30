@@ -176,11 +176,17 @@
     <div class="row">
       <label>Source / citation<input id="map-source" type="text" placeholder="vendor document"></label>
     </div>
-    <p class="hint">Paste the grid: a header row of column offsets, then one row per
-      row-offset starting with that offset. Tabs, commas or spaces. Blank or NA for
-      masked cells.</p>
-    <textarea id="map-grid" rows="12" spellcheck="false"
-      placeholder="&#9;-19.7&#9;0&#9;19.7&#10;19.7&#9;0.370&#9;0.757&#9;0.381&#10;39.4&#9;0.149&#9;0.195&#9;0.157"></textarea>
+    <p class="hint">Top row is each column's offset from the isocentre, left column is
+      each row's offset. In Excel/Sheets, select the whole block <em>including</em> its
+      blank top-left cell, copy, then click this table's top-left cell and paste — it
+      grows to fit and the columns line up automatically. A partial paste into any other
+      cell fills from there instead. Leave a cell blank or type NA for a masked area.</p>
+    <div class="row">
+      <button type="button" id="map-add-col">+ column</button>
+      <button type="button" id="map-add-row">+ row</button>
+      <button type="button" id="map-clear">Clear</button>
+    </div>
+    <div id="map-table-wrap"><table id="map-table"></table></div>
     <div class="dialog-actions">
       <button value="cancel">Cancel</button>
       <button id="map-import" value="import">Import</button>
