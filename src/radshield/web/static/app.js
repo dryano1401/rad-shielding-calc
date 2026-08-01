@@ -22,6 +22,7 @@ const state = {
   drag: null,
   results: null,
   ghost: false,
+  showChartGrid: false,     // debug overlay of a selected chart's grid values
 };
 
 const canvas = document.getElementById('plan');
@@ -196,6 +197,78 @@ function floorTransform(from, to) {
   };
 }
 
+// Mirrors physics/isodose.py's COORDINATE_UNITS.
+const CHART_COORDINATE_UNITS_M = { in: 0.0254, ft: 0.3048, mm: 0.001, cm: 0.01, m: 1.0 };
+
+// Like frameOf(), but never null: a floor with no alignment feature still has
+// a valid frame for its own points (identity), which is all a same-floor
+// debug overlay needs. Mirrors geometry.floor_frame()'s fallback exactly.
+function sameFloorFrame(floor) {
+  if (!floor.alignment) return { ox: 0, oy: 0, ax: 1, ay: 0, scale: floor.metres_per_unit };
+  const [ox, oy] = floor.alignment;
+  if (!floor.alignment2) return { ox, oy, ax: 1, ay: 0, scale: floor.metres_per_unit };
+  const dx = floor.alignment2[0] - ox;
+  const dy = floor.alignment2[1] - oy;
+  const span = Math.hypot(dx, dy);
+  if (span < 1e-9) return { ox, oy, ax: 1, ay: 0, scale: floor.metres_per_unit };
+  return { ox, oy, ax: dx / span, ay: dy / span, scale: floor.metres_per_unit };
+}
+
+// Where a chart cell (in its own raw grid units) actually sits on the plan,
+// given a source's placement and rotation. The exact inverse of
+// geometry.chart_direction() -- see that function for the forward transform
+// this undoes -- so a grid overlay drawn from this is a true picture of what
+// the calculation reads, not an approximation of it.
+function chartCellScreenPos(floor, source, xRaw, yRaw, coordinateUnit, flipX, flipY) {
+  const frame = sameFloorFrame(floor);
+  const unitScale = CHART_COORDINATE_UNITS_M[coordinateUnit] ?? 1;
+  const localX = xRaw * unitScale * (flipX ? -1 : 1);
+  const localY = yRaw * unitScale * (flipY ? -1 : 1);
+
+  const theta = (source.rotation_deg || 0) * Math.PI / 180;
+  const east = localX * Math.cos(theta) - localY * Math.sin(theta);
+  const north = localX * Math.sin(theta) + localY * Math.cos(theta);
+
+  const slx = source.x - frame.ox, sly = source.y - frame.oy;
+  const sourceAlong = (slx * frame.ax + sly * frame.ay) * frame.scale;
+  const sourceAcross = (slx * frame.ay - sly * frame.ax) * frame.scale;
+
+  const along = (sourceAlong + east) / frame.scale;
+  const across = (sourceAcross + north) / frame.scale;
+  return toScreen(
+    frame.ox + along * frame.ax + across * frame.ay,
+    frame.oy + along * frame.ay - across * frame.ax,
+  );
+}
+
+function drawChartGridDebug(floor) {
+  if (!state.showChartGrid || state.selection?.kind !== 'source') return;
+  const source = state.project.sources.find(s => s.id === state.selection.id);
+  const mapId = source?.params?.plan_map_id;
+  if (!source || source.floor_id !== floor.id || !mapId) return;
+  const chart = (state.project.scatter_maps || []).find(m => m.id === mapId);
+  if (!chart) return;
+
+  ctx.save();
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  for (let row = 0; row < chart.y_coords.length; row++) {
+    for (let col = 0; col < chart.x_coords.length; col++) {
+      const value = chart.values[row]?.[col];
+      const p = chartCellScreenPos(
+        floor, source, chart.x_coords[col], chart.y_coords[row],
+        chart.coordinate_unit, chart.flip_x, chart.flip_y,
+      );
+      ctx.fillStyle = value == null ? 'rgba(255,90,90,.9)' : 'rgba(255,214,0,.95)';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillText(value == null ? 'NA' : String(value), p.x, p.y - 5);
+    }
+  }
+  ctx.restore();
+}
+
 function pointsOnFloor(floorId) {
   if (!state.project) return { sources: [], pois: [] };
   return {
@@ -242,6 +315,7 @@ function draw() {
   drawMeasurements(floor);
   drawPoints(floor, 1);
   drawCalibration(floor);
+  drawChartGridDebug(floor);
 }
 
 function drawWalls(floor) {
@@ -1217,7 +1291,13 @@ function renderSourceInspector(title, box) {
            </div>
            <p class="hint">The placed point is the <em>isocentre</em>. The orange arrow shows
              the chart's +y axis — usually the table. Rotate until it matches the drawing.</p>
-           <div class="field">Source of the chart<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>`
+           <div class="field">Source of the chart<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
+           ${p.plan_map_id ? `<label><input type="checkbox" id="chart-grid-debug"
+             ${state.showChartGrid ? 'checked' : ''}> Overlay the plan chart's grid values on
+             the drawing (debug)</label>
+           <p class="hint">Temporary, to check the chart lines up with the room — every
+             printed cell is placed at the real position it will be read from, given the
+             current rotation and flip settings, and labelled with its value.</p>` : ''}`
         : p.scatter_method === 'isodose'
         ? `<div class="field">Isodose kerma at 1 m per procedure (mGy)<input type="number" step="0.0001" value="${p.isodose_kerma_mGy_at_1m ?? ''}" data-k="isodose_kerma_mGy_at_1m"></div>
            <div class="field">Source of the scatter data<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
@@ -1240,6 +1320,9 @@ function renderSourceInspector(title, box) {
     <button data-act="delete" class="wide">Delete source</button>`;
 
   wireInspector(box, `/api/sources/${source.id}`, source);
+
+  const gridDebug = box.querySelector('#chart-grid-debug');
+  if (gridDebug) gridDebug.onchange = () => { state.showChartGrid = gridDebug.checked; draw(); };
 
   const saveIsotopes = async entries => {
     try {
