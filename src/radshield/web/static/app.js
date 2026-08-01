@@ -215,11 +215,11 @@ function sameFloorFrame(floor) {
 }
 
 // Where a chart cell (in its own raw grid units) actually sits on the plan,
-// given a source's placement and rotation. The exact inverse of
-// geometry.chart_direction() -- see that function for the forward transform
-// this undoes -- so a grid overlay drawn from this is a true picture of what
-// the calculation reads, not an approximation of it.
-function chartCellScreenPos(floor, source, xRaw, yRaw, coordinateUnit, flipX, flipY) {
+// given a source's placement and rotation, in that floor's PDF space. The
+// exact inverse of geometry.chart_direction() -- see that function for the
+// forward transform this undoes -- so a grid overlay drawn from this is a
+// true picture of what the calculation reads, not an approximation of it.
+function chartCellPdfPos(floor, source, xRaw, yRaw, coordinateUnit, flipX, flipY) {
   const frame = sameFloorFrame(floor);
   const unitScale = CHART_COORDINATE_UNITS_M[coordinateUnit] ?? 1;
   const localX = xRaw * unitScale * (flipX ? -1 : 1);
@@ -235,10 +235,41 @@ function chartCellScreenPos(floor, source, xRaw, yRaw, coordinateUnit, flipX, fl
 
   const along = (sourceAlong + east) / frame.scale;
   const across = (sourceAcross + north) / frame.scale;
-  return toScreen(
-    frame.ox + along * frame.ax + across * frame.ay,
-    frame.oy + along * frame.ay - across * frame.ax,
-  );
+  return {
+    x: frame.ox + along * frame.ax + across * frame.ay,
+    y: frame.oy + along * frame.ay - across * frame.ax,
+  };
+}
+
+function chartCellScreenPos(floor, source, xRaw, yRaw, coordinateUnit, flipX, flipY) {
+  const p = chartCellPdfPos(floor, source, xRaw, yRaw, coordinateUnit, flipX, flipY);
+  return toScreen(p.x, p.y);
+}
+
+// A vendor chart can run to several metres in each direction, so at whatever
+// zoom shows the whole room it renders as an unreadable smear of tiny text.
+// Zoom straight to the chart's own extent (and the isocentre) instead, so
+// turning the overlay on shows something legible immediately.
+function fitChartGridDebug(floor, source, chart) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const lastX = chart.x_coords[chart.x_coords.length - 1];
+  const lastY = chart.y_coords[chart.y_coords.length - 1];
+  const points = [
+    [chart.x_coords[0], chart.y_coords[0]], [lastX, chart.y_coords[0]],
+    [chart.x_coords[0], lastY], [lastX, lastY],
+  ].map(([x, y]) => chartCellPdfPos(floor, source, x, y, chart.coordinate_unit, chart.flip_x, chart.flip_y));
+  points.push({ x: source.x, y: source.y });
+
+  const minX = Math.min(...points.map(p => p.x)), maxX = Math.max(...points.map(p => p.x));
+  const minY = Math.min(...points.map(p => p.y)), maxY = Math.max(...points.map(p => p.y));
+  const scale = Math.min(
+    rect.width / (Math.max(maxX - minX, 1e-6) * RENDER_ZOOM),
+    rect.height / (Math.max(maxY - minY, 1e-6) * RENDER_ZOOM),
+  ) * 0.8;
+  state.view.scale = Math.min(Math.max(scale, 0.02), 30);
+  state.view.x = rect.width / 2 - (minX + maxX) / 2 * RENDER_ZOOM * state.view.scale;
+  state.view.y = rect.height / 2 - (minY + maxY) / 2 * RENDER_ZOOM * state.view.scale;
 }
 
 function drawChartGridDebug(floor) {
@@ -250,8 +281,9 @@ function drawChartGridDebug(floor) {
   if (!chart) return;
 
   ctx.save();
-  ctx.font = '9px ui-monospace, monospace';
+  ctx.font = '10px ui-monospace, monospace';
   ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
   for (let row = 0; row < chart.y_coords.length; row++) {
     for (let col = 0; col < chart.x_coords.length; col++) {
       const value = chart.values[row]?.[col];
@@ -259,11 +291,17 @@ function drawChartGridDebug(floor) {
         floor, source, chart.x_coords[col], chart.y_coords[row],
         chart.coordinate_unit, chart.flip_x, chart.flip_y,
       );
-      ctx.fillStyle = value == null ? 'rgba(255,90,90,.9)' : 'rgba(255,214,0,.95)';
+      const text = value == null ? 'NA' : String(value);
+      // A background chip, since these values sit on top of whatever the
+      // drawing underneath happens to be -- usually a light-coloured plan.
+      const width = ctx.measureText(text).width;
+      ctx.fillStyle = 'rgba(10,12,16,.82)';
+      ctx.fillRect(p.x - width / 2 - 2, p.y - 15, width + 4, 13);
+      ctx.fillStyle = value == null ? '#ff6a6a' : '#ffd600';
       ctx.beginPath();
       ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillText(value == null ? 'NA' : String(value), p.x, p.y - 5);
+      ctx.fillText(text, p.x, p.y - 3);
     }
   }
   ctx.restore();
@@ -1322,7 +1360,14 @@ function renderSourceInspector(title, box) {
   wireInspector(box, `/api/sources/${source.id}`, source);
 
   const gridDebug = box.querySelector('#chart-grid-debug');
-  if (gridDebug) gridDebug.onchange = () => { state.showChartGrid = gridDebug.checked; draw(); };
+  if (gridDebug) gridDebug.onchange = () => {
+    state.showChartGrid = gridDebug.checked;
+    if (state.showChartGrid) {
+      const chart = (state.project.scatter_maps || []).find(m => m.id === source.params.plan_map_id);
+      if (chart) fitChartGridDebug(currentFloor(), source, chart);
+    }
+    draw();
+  };
 
   const saveIsotopes = async entries => {
     try {
