@@ -23,6 +23,7 @@ const state = {
   results: null,
   ghost: false,
   showChartGrid: false,     // debug overlay of a selected chart's grid values
+  resultsCollapsed: false,
 };
 
 const canvas = document.getElementById('plan');
@@ -1714,6 +1715,15 @@ document.getElementById('obliquity').onchange = async event => {
   if (state.results) calculate();
 };
 document.getElementById('btn-calculate').onclick = () => calculate().catch(e => alert(e.message));
+document.getElementById('btn-collapse-results').onclick = () => {
+  state.resultsCollapsed = !state.resultsCollapsed;
+  document.getElementById('results-panel').classList.toggle('collapsed', state.resultsCollapsed);
+  document.getElementById('btn-collapse-results').textContent =
+    state.resultsCollapsed ? 'Expand ▴' : 'Minimize ▾';
+  // The canvas fills whatever space the panel leaves it via flex layout, but
+  // that reflow doesn't fire a window resize event, so draw() needs a nudge.
+  requestAnimationFrame(draw);
+};
 
 /* Scatter-chart import: a paste-able grid of cells rather than raw text, so
  * pasting straight from Excel/Sheets lines up into visible rows and columns

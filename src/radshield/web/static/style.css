@@ -129,6 +129,8 @@ a#btn-csv {
 .results-header { display: flex; align-items: center; gap: 10px; padding: 8px 14px; }
 .results-header h2 { margin: 0; }
 #results { overflow: auto; padding: 0 14px 14px; }
+#results-panel.collapsed { max-height: none; }
+#results-panel.collapsed #results { display: none; }
 
 table { border-collapse: collapse; width: 100%; font-size: 12px; }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
