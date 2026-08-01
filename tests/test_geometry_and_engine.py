@@ -276,8 +276,11 @@ def test_point_with_no_sources_reports_error_not_crash():
     assert not result.shielding_required
 
 
-def test_mixed_methodologies_solved_separately():
-    """TG-108 and NCRP 147 use different dose quantities and must not be summed."""
+def test_mixed_methodologies_are_summed():
+    """1 uGy and 1 uSv coincide for these photon energies, so a point seeing
+    both source types needs a wall thick enough for their combined dose --
+    solving each alone and taking the larger requirement can understate that.
+    """
     project = build_project()
     project.sources.append(uptake_source())
     project.sources.append(
@@ -291,11 +294,47 @@ def test_mixed_methodologies_solved_separately():
                         linked_source_ids=["src1", "src2"])
     )
     result = evaluate_point(project, project.pois[0])
-    assert {m.method for m in result.methods} == {"tg108", "ncrp147"}
-    assert any("solved separately" in w for w in result.warnings)
-    # The governing requirement is the larger of the two, not their sum.
-    per_method = [m.thickness_mm.get("lead", 0.0) for m in result.methods]
-    assert result.governing_thickness_mm["lead"] == pytest.approx(max(per_method))
+    assert {m.method for m in result.methods} == {"tg108", "ncrp147", "combined"}
+    assert any("summed" in w for w in result.warnings)
+
+    combined = next(m for m in result.methods if m.method == "combined")
+    per_method = [m.thickness_mm.get("lead", 0.0) for m in result.methods if m.method != "combined"]
+    # At the thicker of the two independent requirements, the methodology
+    # that set it is exactly at the weekly goal by construction; the other
+    # methodology's dose still gets through on top of that, so meeting the
+    # combined goal takes strictly more than either alone -- never just the
+    # larger of the two, and never their plain sum either (transmission has
+    # already knocked the harder one down to size).
+    assert combined.thickness_mm["lead"] > max(per_method)
+    assert result.governing_thickness_mm["lead"] == pytest.approx(combined.thickness_mm["lead"])
+
+
+def test_mixed_methodologies_mark_single_methodology_materials_unavailable():
+    """Iron has no NCRP 147 data and gypsum has no TG-108 data in this app, so
+    once both source types are present at a point, a combined requirement
+    can't be verified for either -- reporting one anyway would silently
+    ignore whichever dose that material has no data for."""
+    project = build_project()
+    project.materials = ["lead", "iron", "gypsum"]
+    project.sources.append(uptake_source())
+    project.sources.append(
+        SourcePoint(
+            id="src2", floor_id="fl1", x=0, y=0, label="Rad room", method="ncrp147",
+            params={"workload": "Rad Room (all barriers)", "barrier_type": "secondary"},
+        )
+    )
+    project.pois.append(
+        PointOfInterest(id="poi1", floor_id="fl2", x=0, y=0, auto_height=True,
+                        linked_source_ids=["src1", "src2"])
+    )
+    result = evaluate_point(project, project.pois[0])
+    combined = next(m for m in result.methods if m.method == "combined")
+    assert "iron" in combined.unavailable
+    assert "gypsum" in combined.unavailable
+    assert "lead" in combined.thickness_mm
+    assert "iron" not in result.governing_thickness_mm
+    assert "gypsum" not in result.governing_thickness_mm
+    assert "lead" in result.governing_thickness_mm
 
 
 def test_csv_rows_include_sources_totals_and_notes():

@@ -363,13 +363,42 @@ the corrected thickness both appear in the results.
 Where several sources are incident on one point, their unshielded doses are
 summed *before* the transmission factor is derived — TG-108 Table VII does
 exactly this for the uptake room and tomograph. The barrier requirement is
-therefore a property of the point, not of a source-point pair.
-
-Caveat: summation is only physically correct when the same barrier lies
-between the point and every summed source. Sources reaching a point through
-different walls will over-shield. Explicit barrier objects are the planned
-remedy (Phase 7).
+therefore a property of the point, not of a source-point pair. Each source's
+dose is attenuated by the barriers on its own path before this summation (see
+§4), so a source reaching the point through a shielded wall correctly sums
+against another reaching it unobstructed rather than being over-shielded by a
+barrier that only stands in one of their ways.
 
 Where summed NCRP 147 sources carry different workload distributions, the
 summed transmission requirement is solved with each source's own Archer
 parameters and the governing (largest) thickness is returned.
+
+### TG-108 and NCRP 147 sources at the same point
+
+Photons are the whole of what both methodologies model here, and the
+radiation weighting factor for photons is 1, so 1 uGy of NCRP 147 air kerma
+and 1 uSv of TG-108 effective dose equivalent are the same quantity, not two
+that merely happen to share a name. `physics/limits.py` already prices its
+default weekly goals on that basis (0.02 mGy uncontrolled = 20 uSv
+uncontrolled, 0.1 mGy controlled = 100 uSv controlled), so nothing about
+adopting it is a new assumption -- it was already latent in the numbers.
+
+A point linked to sources of both kinds therefore has its doses **summed**,
+not solved separately with the larger of the two requirements taken as
+before. The distinction matters: two sources each individually under the
+weekly goal can still add up to more than it, and reporting whichever
+methodology's own thickness is larger misses that entirely.
+
+There is no closed-form thickness for the combined case the way there is for
+one methodology alone, because the two contributions attenuate at different
+rates through the same material -- different photon energies, different
+Archer fits. `_solve_combined` finds it by bisection instead, which is safe
+because transmission is monotonically decreasing in thickness for both. A
+material tabulated for only one of the two methodologies (iron for TG-108,
+gypsum/steel/glass/wood for NCRP 147) is reported as unavailable for the
+combined requirement rather than silently ignoring whichever dose it has no
+data for -- the same choice already made when a barrier's material has no
+transmission data at all (§4).
+
+Each methodology's own total and thickness are still reported alongside the
+combined row, for the audit trail; it is the combined figure that governs.

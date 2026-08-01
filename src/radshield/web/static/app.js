@@ -1654,7 +1654,9 @@ async function calculate() {
         <td>all sources</td><td>${method.method}</td><td class="num"></td>
         <td class="num">${fmt(method.total)}</td>
         <td class="num">${transmission === null || transmission > 1e6 ? '—' : transmission.toFixed(4)}</td>
-        ${materials.map(m => `<td class="num">${(method.thickness_mm[m] ?? 0).toFixed(2)}</td>`).join('')}
+        ${materials.map(m => method.unavailable?.[m]
+          ? `<td class="num" title="${escapeHtml(method.unavailable[m])}">—</td>`
+          : `<td class="num">${(method.thickness_mm[m] ?? 0).toFixed(2)}</td>`).join('')}
         <td>${transmission > 1
           ? '<span class="tag ok">none needed</span>'
           : '<span class="tag need">shielding</span>'}</td></tr>`;

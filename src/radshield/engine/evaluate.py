@@ -2,10 +2,17 @@
 
 Every source linked to a point contributes.  Doses are summed *within a
 methodology* before the transmission factor is derived, matching TG-108
-Table VII.  TG-108 and NCRP 147 results are not summed with each other: one is
-effective dose equivalent and the other air kerma, and their design goals are
-different quantities.  Where a point sees both, each is solved separately and
-the governing (thicker) requirement is reported alongside both components.
+Table VII.  Where a point sees both TG-108 and NCRP 147 sources, each is
+still solved on its own for the audit trail, but the two are also summed:
+1 uGy air kerma and 1 uSv effective dose equivalent coincide for the photon
+energies both methodologies model here (radiation weighting factor 1), so
+a wall thick enough for one alone is not necessarily thick enough for both
+together -- two sources each individually under the weekly goal can still
+add up to more than it.  ``_solve_combined`` finds the thickness that meets
+the summed dose by bisection, since the two attenuate at different rates
+(different photon energies) and there is no closed form the way there is
+for one methodology alone; that combined figure is what governs, not the
+larger of the two independent requirements.
 """
 
 from __future__ import annotations
@@ -358,8 +365,14 @@ def _solve_tg108(
     poi: PointOfInterest,
     pairs: list[tuple[SourcePoint, Distance]],
     materials: list[str],
-) -> tuple[MethodResult, list[SourceContribution]]:
-    """Attenuate each TG-108 source by its own path, sum, then solve."""
+) -> tuple[MethodResult, list[SourceContribution], str]:
+    """Attenuate each TG-108 source by its own path, sum, then solve.
+
+    Returns the nuclide used for the group's shared 511 keV Archer fit as a
+    third element, alongside the result and contributions, so a point also
+    seeing NCRP 147 sources can reuse the same fit when solving the combined
+    dose rather than re-deriving it.
+    """
     goal = tg108_goal(poi.area_class)
 
     # Every isotope in play emits the same 511 keV annihilation photon, so one
@@ -456,6 +469,7 @@ def _solve_tg108(
             unavailable=unavailable,
         ),
         contributions,
+        attenuation_nuclide,
     )
 
 
@@ -564,6 +578,163 @@ def _solve_ncrp147(
     )
 
 
+def _params_for_ncrp_source(source: SourcePoint, material: str) -> Any:
+    """One NCRP 147 source's own Archer fit for ``material``.
+
+    Distance and occupancy don't affect which fit applies -- only workload,
+    barrier type and (for CT) kVp do -- so this rebuilds just enough of the
+    source's inputs to look it up, the same dummy-distance approach
+    ``reference_dose()`` already uses for its 1 m sanity figure.
+    """
+    if source.method == "ncrp147_ct":
+        return ncrp_ct.barrier_params(_ct_inputs(source, 1.0, 1.0), material)
+    return ncrp_barriers.barrier_params(_ncrp_inputs(source, 1.0, 1.0), material)
+
+
+def _combined_dose_uSv_at(
+    thickness_mm: float,
+    material: str,
+    project: Project,
+    tg108_total_uSv: float,
+    tg108_params: Any | None,
+    ncrp147_contributions: list[SourceContribution],
+) -> float | None:
+    """Total TG-108 + NCRP 147 dose (uSv) through ``thickness_mm`` of ``material``.
+
+    None means at least one contributing source has no transmission data for
+    this material -- refusing to guess rather than silently ignoring part of
+    the real dose, the same choice ``_path_attenuation`` makes for a barrier
+    of unrecognised material.
+    """
+    total = 0.0
+    if tg108_total_uSv > 0:
+        if tg108_params is None:
+            return None
+        native = _native_thickness(thickness_mm, tg108_params.unit)
+        total += tg108_total_uSv * archer_transmission(tg108_params, native)
+    for contribution in ncrp147_contributions:
+        if contribution.value <= 0:
+            continue
+        try:
+            params = _params_for_ncrp_source(project.source(contribution.source_id), material)
+        except Exception:
+            return None
+        native = _native_thickness(thickness_mm, params.unit)
+        total += contribution.value * 1000.0 * archer_transmission(params, native)
+    return total
+
+
+def _solve_combined_thickness(
+    material: str,
+    goal_uSv: float,
+    project: Project,
+    tg108_total_uSv: float,
+    tg108_params: Any | None,
+    ncrp147_contributions: list[SourceContribution],
+) -> float | None:
+    """Thickness of ``material`` (mm) bringing the combined dose to ``goal_uSv``.
+
+    TG-108 and NCRP 147 attenuate at different rates through the same
+    material -- different photon energies -- so there is no closed form the
+    way there is for one methodology alone. Bisected instead, which is safe
+    because transmission is monotonically decreasing in thickness for both.
+
+    Returns:
+        The thickness in mm, ``inf`` if the goal can't be met with this
+        material, or ``None`` if a contributing source lacks the data to
+        evaluate it at all.
+    """
+    at = lambda t: _combined_dose_uSv_at(
+        t, material, project, tg108_total_uSv, tg108_params, ncrp147_contributions
+    )
+    baseline = at(0.0)
+    if baseline is None:
+        return None
+    if baseline <= goal_uSv:
+        return 0.0
+
+    lo, hi = 0.0, 10.0
+    while True:
+        value = at(hi)
+        if value is None:
+            return None
+        if value <= goal_uSv:
+            break
+        hi *= 2
+        if hi > 1e5:
+            return float("inf")
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        value = at(mid)
+        if value is None:
+            return None
+        if value > goal_uSv:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+def _solve_combined(
+    project: Project,
+    poi: PointOfInterest,
+    tg108_result: MethodResult,
+    tg108_nuclide: str,
+    ncrp147_result: MethodResult,
+    ncrp147_contributions: list[SourceContribution],
+    materials: list[str],
+) -> MethodResult:
+    """Solve one barrier thickness against the *summed* TG-108 + NCRP 147 dose.
+
+    1 uGy air kerma and 1 uSv effective dose equivalent coincide for the
+    photon energies both methodologies model here (radiation weighting
+    factor 1 -- see physics/limits.py), so a point seeing both source types
+    needs one wall thick enough for their combined dose. Solving each
+    methodology alone and taking the larger requirement, as before, can
+    understate that: two sources each individually under the weekly goal can
+    still add up to more than it.
+    """
+    goal_uSv = tg108_goal(poi.area_class).value
+    combined_goal_uSv = goal_uSv / poi.occupancy
+
+    thickness_mm: dict[str, float] = {}
+    unavailable: dict[str, str] = {}
+    for material in materials:
+        tg108_params: Any | None = None
+        if material in TG108_MATERIALS:
+            try:
+                tg108_params = nuclides.get_archer(tg108_nuclide, material)
+            except Exception:
+                tg108_params = None
+
+        gross = _solve_combined_thickness(
+            material, combined_goal_uSv, project,
+            tg108_result.total, tg108_params, ncrp147_contributions,
+        )
+        if gross is None:
+            unavailable[material] = (
+                "at least one source has no transmission data for this material, so the "
+                "combined TG-108 + NCRP 147 requirement can't be verified"
+            )
+        elif gross == float("inf"):
+            unavailable[material] = "the combined dose cannot be brought under the goal with this material"
+        else:
+            thickness_mm[material] = max(gross - _existing_credit_mm(poi, material, "mm"), 0.0)
+
+    combined_total_uSv = tg108_result.total + ncrp147_result.total * 1000.0
+    return MethodResult(
+        method="combined",
+        quantity="TG-108 + NCRP 147 combined (uSv/week; 1 uGy = 1 uSv)",
+        total=combined_total_uSv,
+        required_transmission=(
+            float("inf") if combined_total_uSv <= 0
+            else goal_uSv / (poi.occupancy * combined_total_uSv)
+        ),
+        thickness_mm=thickness_mm,
+        unavailable=unavailable,
+    )
+
+
 def _thickness_for(result: Any, material: str, b: float) -> float:
     """Thickness in mm for one evaluated x-ray barrier at transmission ``b``."""
     from ..physics.archer import thickness as archer_thickness
@@ -617,12 +788,26 @@ def evaluate_point(project: Project, poi: PointOfInterest) -> PointResult:
         group = "tg108" if source.method == "tg108" else "ncrp147"
         by_method[group].append((source, dist))
 
+    tg108_result: MethodResult | None = None
+    tg108_nuclide: str | None = None
+    ncrp147_result: MethodResult | None = None
+    ncrp147_contributions: list[SourceContribution] = []
+
     for group, pairs in by_method.items():
         if not pairs:
             continue
         try:
-            solver = _solve_tg108 if group == "tg108" else _solve_ncrp147
-            method_result, contributions = solver(project, poi, pairs, project.materials)
+            if group == "tg108":
+                tg108_result, contributions, tg108_nuclide = _solve_tg108(
+                    project, poi, pairs, project.materials
+                )
+                method_result = tg108_result
+            else:
+                ncrp147_result, contributions = _solve_ncrp147(
+                    project, poi, pairs, project.materials
+                )
+                ncrp147_contributions = contributions
+                method_result = ncrp147_result
         except Exception as exc:
             result.errors.append(f"{group}: {exc}")
             continue
@@ -633,10 +818,20 @@ def evaluate_point(project: Project, poi: PointOfInterest) -> PointResult:
                 result.governing_thickness_mm.get(material, 0.0), mm
             )
 
-    if len(result.methods) > 1:
+    if tg108_result is not None and ncrp147_result is not None:
+        combined = _solve_combined(
+            project, poi, tg108_result, tg108_nuclide, ncrp147_result,
+            ncrp147_contributions, project.materials,
+        )
+        result.methods.append(combined)
+        # The combined row is what governs, not the larger of the two totals
+        # taken independently -- two sources each under the goal alone can
+        # still add up to more than it.
+        result.governing_thickness_mm = dict(combined.thickness_mm)
         result.warnings.append(
-            "this point sees both TG-108 and NCRP 147 sources; the two are solved separately "
-            "because they use different dose quantities, and the thicker requirement governs"
+            "this point sees both TG-108 and NCRP 147 sources; 1 uGy and 1 uSv coincide for "
+            "the photon energies both model, so their doses are summed -- see the combined "
+            "row, which is what governs rather than either methodology's own total alone"
         )
 
     return result

@@ -910,3 +910,40 @@ def test_reference_dose_reports_an_unusable_source_rather_than_failing(client):
                        "params": {"scatter_method": "chart", "plan_map_id": ""}})
     reference = client.get("/api/project").json()["sources"][0]["reference_dose"]
     assert "error" in reference
+
+
+def test_results_api_reports_a_combined_row_for_mixed_methodologies(client):
+    """1 uGy and 1 uSv coincide for these photon energies, so a point seeing
+    a TG-108 source and an NCRP 147 source needs one wall thick enough for
+    their combined dose, surfaced here as a third 'combined' row."""
+    floor_id = add_floor(client, "Level 1", 0.0)["floors"][0]["id"]
+    calibrate(client, floor_id)
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
+
+    tg108_id = client.post("/api/sources", json={
+        "floor_id": floor_id, "x": 0, "y": 0, "label": "Uptake room",
+        "method": "tg108", "height_above_floor_m": 1.0,
+        "params": {"kind": "uptake", "nuclide": "F-18",
+                   "administered_activity_MBq": 555, "patients_per_week": 40,
+                   "uptake_time_h": 1.0},
+    }).json()["sources"][0]["id"]
+    ncrp_id = client.post("/api/sources", json={
+        "floor_id": floor_id, "x": 0, "y": 0, "label": "Rad room", "method": "ncrp147",
+        "params": {"workload": "Rad Room (all barriers)", "barrier_type": "secondary"},
+    }).json()["sources"][-1]["id"]
+
+    client.post("/api/pois", json={
+        "floor_id": floor_id, "x": 40, "y": 0, "label": "Corridor",
+        "occupancy": 1.0, "area_class": "uncontrolled", "auto_height": False,
+        "height_above_floor_m": 1.0, "offset_applied": True,
+        "linked_source_ids": [tg108_id, ncrp_id],
+    })
+    client.post("/api/materials", json={"materials": ["lead"]})
+
+    result = client.get("/api/results").json()["results"][0]
+    methods = {m["method"]: m for m in result["methods"]}
+    assert set(methods) == {"tg108", "ncrp147", "combined"}
+    assert any("summed" in w for w in result["warnings"])
+    assert methods["combined"]["thickness_mm"]["lead"] > max(
+        methods["tg108"]["thickness_mm"]["lead"], methods["ncrp147"]["thickness_mm"]["lead"]
+    )
