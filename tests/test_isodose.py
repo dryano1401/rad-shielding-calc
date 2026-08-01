@@ -70,6 +70,22 @@ def test_parse_tab_separated_grid_with_na_cells():
     assert values[1][1] is None
 
 
+def test_parse_accepts_a_true_minus_sign_and_an_em_dash_mask():
+    """Pasted from a PDF or typed by hand, negative offsets sometimes carry
+    a real minus sign (U+2212) rather than a hyphen, and masked cells an em
+    dash rather than "NA" -- both showed up in a real vendor chart."""
+    text = (
+        "\t−78.7\t0\t78.7\n"
+        "−19.7\t0.021\t—\t0.021\n"
+        "19.7\t0.008\t0.757\t0.006\n"
+    )
+    x, y, values = isodose.parse_grid(text)
+    assert x == [-78.7, 0, 78.7]
+    assert y == [-19.7, 19.7]
+    assert values[0][1] is None
+    assert values[1] == [0.008, 0.757, 0.006]
+
+
 def test_parse_accepts_commas_and_spaces():
     for text in ("' '\n-19.7,0\n19.7,0.37,0.76\n".replace("' '", ""),
                  "  -19.7 0\n19.7 0.37 0.76\n"):

@@ -461,6 +461,18 @@ def extrapolate(
     )
 
 
+# A pasted chart's negative offsets sometimes carry a true minus sign or a
+# dash (copied out of a PDF or typed by hand) instead of an ASCII hyphen.
+_MINUS_VARIANTS = str.maketrans({
+    "‐": "-", "‑": "-", "‒": "-",
+    "–": "-", "—": "-", "−": "-",
+})
+
+
+def _to_float(text: str) -> float:
+    return float(text.translate(_MINUS_VARIANTS))
+
+
 def parse_grid(text: str) -> tuple[list[float], list[float], list[list[float | None]]]:
     """Parse a pasted scatter grid into coordinates and values.
 
@@ -486,10 +498,10 @@ def parse_grid(text: str) -> tuple[list[float], list[float], list[list[float | N
     header = split(rows[0])
     # A leading blank corner cell is optional.
     try:
-        x_coords = [float(c) for c in header]
+        x_coords = [_to_float(c) for c in header]
     except ValueError:
         try:
-            x_coords = [float(c) for c in header[1:]]
+            x_coords = [_to_float(c) for c in header[1:]]
         except ValueError as exc:
             raise IsodoseError(
                 f"could not read the header row of column offsets: {header}"
@@ -502,7 +514,7 @@ def parse_grid(text: str) -> tuple[list[float], list[float], list[list[float | N
         if len(parts) < 2:
             continue
         try:
-            y_coords.append(float(parts[0]))
+            y_coords.append(_to_float(parts[0]))
         except ValueError as exc:
             raise IsodoseError(f"row does not start with a row offset: {parts[0]!r}") from exc
         row: list[float | None] = []
@@ -511,7 +523,7 @@ def parse_grid(text: str) -> tuple[list[float], list[float], list[list[float | N
                 row.append(None)
             else:
                 try:
-                    row.append(float(cell))
+                    row.append(_to_float(cell))
                 except ValueError:
                     row.append(None)
         # Pad or trim so ragged rows still line up with the header.
