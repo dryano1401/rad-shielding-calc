@@ -1628,6 +1628,7 @@ async function calculate() {
   let html = `<table><thead><tr>
     <th>Point</th><th>Floor</th><th>Source</th><th>Method</th>
     <th class="num">Distance (m)</th><th class="num">Weekly</th><th class="num">B</th>
+    <th class="num">% of P/T</th>
     ${materials.map(m => `<th class="num">${m} (mm)</th>`).join('')}
     <th>Status</th></tr></thead><tbody>`;
 
@@ -1642,6 +1643,7 @@ async function calculate() {
         <td class="num">${fmt(contribution.value)} ${contribution.quantity.includes('uSv') ? 'µSv' : 'mGy'}</td>
         <td class="num">${contribution.path_transmission < 1
           ? `<span class="tag need">×${contribution.path_transmission.toFixed(3)}</span>` : ''}</td>
+        <td class="num"></td>
         ${materials.map(() => '<td></td>').join('')}
         <td>${contribution.barriers.length
           ? `${contribution.barriers.length} barrier(s), ${contribution.path_equivalent_mm.toFixed(1)} mm Pb eq`
@@ -1649,11 +1651,18 @@ async function calculate() {
     }
     for (const method of result.methods) {
       const transmission = method.required_transmission;
+      // required_transmission = P / (T * dose), so this dose is already
+      // P/T * (1 / required_transmission) of the design goal -- no need for
+      // the goal value itself to report it as a percentage.
+      const pctOfGoal = transmission === null ? 0 : 100 / transmission;
       html += `<tr class="total">
         <td>${escapeHtml(result.label)}</td><td>${escapeHtml(result.floor_name)}</td>
         <td>all sources</td><td>${method.method}</td><td class="num"></td>
-        <td class="num">${fmt(method.total)}</td>
+        <td class="num">${fmt(method.total)} ${method.quantity.includes('uSv') ? 'µSv' : 'mGy'}</td>
         <td class="num">${transmission === null || transmission > 1e6 ? '—' : transmission.toFixed(4)}</td>
+        <td class="num">${pctOfGoal > 100
+          ? `<span class="tag need">${pctOfGoal.toFixed(1)}%</span>`
+          : `${pctOfGoal.toFixed(1)}%`}</td>
         ${materials.map(m => method.unavailable?.[m]
           ? `<td class="num" title="${escapeHtml(method.unavailable[m])}">—</td>`
           : `<td class="num">${(method.thickness_mm[m] ?? 0).toFixed(2)}</td>`).join('')}

@@ -192,6 +192,8 @@ def test_full_workflow_produces_results_and_csv(client):
     assert {"source", "total"} <= {row["row_type"] for row in rows}
     total_row = next(row for row in rows if row["row_type"] == "total")
     assert float(total_row["lead_mm"]) > 0
+    # 117 uSv/week against the 20 uSv/week uncontrolled goal, bare -- 100/B.
+    assert float(total_row["pct_of_goal"]) == pytest.approx(100.0 / 0.17, rel=0.02)
 
 
 def test_dragging_a_point_persists_new_coordinates(client):

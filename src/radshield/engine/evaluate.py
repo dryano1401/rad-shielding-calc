@@ -1055,6 +1055,10 @@ def results_to_rows(results: list[PointResult], materials: list[str]) -> list[di
                     "" if method.required_transmission == float("inf")
                     else round(method.required_transmission, 5)
                 ),
+                "pct_of_goal": (
+                    "" if method.required_transmission == float("inf")
+                    else round(100.0 / method.required_transmission, 2)
+                ),
             }
             for material in materials:
                 row[f"{material}_mm"] = round(method.thickness_mm.get(material, 0.0), 3)
