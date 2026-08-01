@@ -447,8 +447,11 @@ function drawPoints(floor, alpha, transform) {
     const on = state.selection?.id === source.id;
     // Equipment with a scatter chart is directional, so show which way its
     // chart is pointing: the arrow is the chart's +y, usually the table axis.
+    // Must match geometry.chart_direction()'s rotation exactly -- that math
+    // is what the dose calculation actually uses, so the arrow is only a
+    // trustworthy guide to setting rotation_deg if it agrees with it.
     if (source.method === 'ncrp147_ct' && source.params?.scatter_method === 'chart') {
-      const angle = -(source.rotation_deg || 0) * Math.PI / 180;
+      const angle = (source.rotation_deg || 0) * Math.PI / 180;
       const length = 34;
       const ax = p.x - Math.sin(angle) * length;
       const ay = p.y - Math.cos(angle) * length;
