@@ -182,6 +182,8 @@ def _scatter_map(project: Project, map_id: str) -> isodose.ScatterMap:
         value_unit=stored.value_unit,
         per=stored.per,
         source=stored.source,
+        flip_x=stored.flip_x,
+        flip_y=stored.flip_y,
     )
 
 

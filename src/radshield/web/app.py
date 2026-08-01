@@ -94,9 +94,15 @@ def _project_payload() -> dict[str, Any]:
                 raw["display"] = "floor not calibrated"
     for raw, stored in zip(data["scatter_maps"], session.project.scatter_maps):
         cells = sum(1 for row in stored.values for v in row if v is not None)
+        flips = ", ".join(
+            label for flag, label in
+            ((stored.flip_x, "columns flipped"), (stored.flip_y, "rows flipped"))
+            if flag
+        )
         raw["summary"] = (
             f"{stored.plane} view, {len(stored.x_coords)}x{len(stored.y_coords)} grid, "
             f"{cells} cells, {stored.value_unit} per {stored.per}"
+            + (f", {flips}" if flips else "")
         )
     for raw, stored in zip(data["sources"], session.project.sources):
         raw["reference_dose"] = reference_dose(session.project, stored)
@@ -386,17 +392,39 @@ def add_scatter_map(payload: dict[str, Any]) -> dict[str, Any]:
             x_coords=x_coords,
             y_coords=y_coords,
             values=values,
+            flip_x=bool(payload.get("flip_x", False)),
+            flip_y=bool(payload.get("flip_y", False)),
         )
         # Build it once now so a malformed grid is rejected on import rather
         # than halfway through a calculation.
         isodose.build_map(
             record.name, record.plane, x_coords, y_coords, values,
             coordinate_unit=record.coordinate_unit, value_unit=record.value_unit,
+            flip_x=record.flip_x, flip_y=record.flip_y,
         )
     except isodose.IsodoseError as exc:
         raise HTTPException(400, str(exc)) from exc
 
     session.project.scatter_maps.append(record)
+    return _project_payload()
+
+
+@app.patch("/api/scatter-maps/{map_id}")
+def update_scatter_map(map_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Flip a chart's column or row axis.
+
+    Useful when the calculated pattern comes out mirrored from the real
+    room -- the vendor's own left/right or front/back convention does not
+    always match the source's rotation arrow.
+    """
+    try:
+        stored = session.project.scatter_map(map_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if "flip_x" in payload:
+        stored.flip_x = bool(payload["flip_x"])
+    if "flip_y" in payload:
+        stored.flip_y = bool(payload["flip_y"])
     return _project_payload()
 
 

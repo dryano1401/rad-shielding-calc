@@ -225,6 +225,8 @@ def build_map(
     value_unit: str = "mGy",
     per: str = "procedure",
     source: str = "",
+    flip_x: bool = False,
+    flip_y: bool = False,
 ) -> ScatterMap:
     """Build a scatter map from a published grid.
 
@@ -236,6 +238,11 @@ def build_map(
         coordinate_unit: Unit of the coordinates, usually inches.
         value_unit: Unit of the cell values.
         per: What each value is per.
+        flip_x: Mirror the column axis. A vendor's own printed left/right or
+            front/back convention does not always match the source's rotation
+            arrow, and there is no way to know which from the grid alone --
+            this corrects it without touching the grid as pasted.
+        flip_y: Mirror the row axis.
 
     Returns:
         A :class:`ScatterMap` in metres and milligray.
@@ -251,7 +258,8 @@ def build_map(
             f"{len(values)} value rows but {len(y_coords)} row coordinates"
         )
 
-    length_scale = COORDINATE_UNITS[coordinate_unit]
+    length_scale = COORDINATE_UNITS[coordinate_unit] * (-1.0 if flip_x else 1.0)
+    height_scale = COORDINATE_UNITS[coordinate_unit] * (-1.0 if flip_y else 1.0)
     value_scale = VALUE_UNITS[value_unit]
 
     cells: list[Cell] = []
@@ -267,7 +275,7 @@ def build_map(
             cells.append(
                 Cell(
                     x_m=x_coords[column_index] * length_scale,
-                    y_m=y_coords[row_index] * length_scale,
+                    y_m=y_coords[row_index] * height_scale,
                     value_mGy=float(value) * value_scale,
                 )
             )
@@ -280,7 +288,7 @@ def build_map(
         per=per,
         source=source,
         xs=[c * length_scale for c in x_coords],
-        ys=[c * length_scale for c in y_coords],
+        ys=[c * height_scale for c in y_coords],
         grid=grid,
     )
 

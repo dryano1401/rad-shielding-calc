@@ -246,6 +246,19 @@ elevation chart when one is assigned, since that is the view describing what
 leaves the gantry vertically. Falling back to the plan chart is allowed but
 noted, because the plan view does not represent the vertical separation.
 
+**Left/right and front/back are not universal.** Rotation places the chart's
+axes on the drawing, but it cannot say which side of the printed grid is
+which -- a vendor may print column offsets increasing toward either side of
+the gantry, or row offsets increasing toward either the foot of the table or
+the back of the gantry, and nothing in the grid itself says which. Each chart
+carries a `flip_x`/`flip_y` pair for this, applied when the grid is turned
+into cells: negating a coordinate moves a cell to the other side of the
+isocentre without touching the value that was read there, so the grid stays
+stored exactly as pasted and can still be checked cell by cell. Left
+unset, a chart reads as printed; either flag can be changed after import,
+without re-pasting, once a calculated pattern shows it is mirrored from the
+real room.
+
 **Workload basis.** Charts are usually quoted per procedure, but per mAs and
 per 100 mAs occur too. The basis is recorded with the chart and decides what
 the weekly total is formed from: a procedure count, or the weekly workload in

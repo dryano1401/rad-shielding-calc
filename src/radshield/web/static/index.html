@@ -176,6 +176,16 @@
     <div class="row">
       <label>Source / citation<input id="map-source" type="text" placeholder="vendor document"></label>
     </div>
+    <p class="hint">Facing the direction the source's arrow will point (the table axis,
+      away from the gantry):</p>
+    <div class="row">
+      <label><input type="checkbox" id="map-flip-x" checked> Column offsets increase to my right</label>
+      <label><input type="checkbox" id="map-flip-y" checked> Row offsets increase the way I'm facing</label>
+    </div>
+    <p class="hint">Uncheck either one if the calculated pattern comes out mirrored
+      left/right or front/back from the real room — the vendor's own convention for
+      which side is which does not always match. Can be changed later without
+      re-pasting the grid.</p>
     <p class="hint">Top row is each column's offset from the isocentre, left column is
       each row's offset. In Excel/Sheets, select the whole block <em>including</em> its
       blank top-left cell, copy, then click this table's top-left cell and paste — it

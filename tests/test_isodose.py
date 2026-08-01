@@ -122,6 +122,22 @@ def test_build_map_rejects_an_empty_chart():
         isodose.build_map("empty", "plan", [0, 1], [0], [[None, 0.0]])
 
 
+def test_flip_mirrors_the_axis_without_touching_the_values():
+    """A vendor's own left/right or front/back convention doesn't always
+    match the source's rotation arrow; flip_x/flip_y correct for that by
+    swapping which side of the isocentre a cell's offset sits on, not what
+    it reads."""
+    plain = plan_map()
+    flipped = isodose.build_map(
+        "Vendor plan view", "plan", PLAN_X, PLAN_Y, PLAN_VALUES,
+        coordinate_unit="in", value_unit="mGy", per="procedure", flip_x=True, flip_y=True,
+    )
+    by_offset = {(round(c.x_m, 4), round(c.y_m, 4)): c.value_mGy for c in plain.cells}
+    for cell in flipped.cells:
+        assert cell.value_mGy == by_offset[(round(-cell.x_m, 4), round(-cell.y_m, 4))]
+    assert flipped.extent == (-plain.extent[1], -plain.extent[0], -plain.extent[3], -plain.extent[2])
+
+
 # --- the physical premise ----------------------------------------------------
 
 def test_kerma_times_radius_squared_is_constant_along_a_bearing():
@@ -401,6 +417,18 @@ def test_charts_survive_a_save_and_reload(tmp_path):
     assert stored.values[7][4] == 0.757
     assert stored.values[3][2] is None
     assert reloaded.source("ct1").rotation_deg == 37.5
+    assert stored.flip_x is False and stored.flip_y is False
+
+
+def test_charts_saved_before_flip_existed_still_load():
+    project = chart_project()
+    data = project.to_dict()
+    for scatter_map in data["scatter_maps"]:
+        scatter_map.pop("flip_x")
+        scatter_map.pop("flip_y")
+    restored = Project.from_dict(data)
+    assert restored.scatter_map("m1").flip_x is False
+    assert restored.scatter_map("m1").flip_y is False
 
 
 def test_chart_is_read_at_the_distance_the_rest_of_the_calculation_uses():

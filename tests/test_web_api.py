@@ -667,6 +667,52 @@ def test_malformed_chart_is_rejected_on_import(client):
     assert client.post("/api/scatter-maps", json={"grid": ""}).status_code == 400
 
 
+def test_flip_x_mirrors_which_side_of_the_chart_is_read(client):
+    """A vendor's own left/right convention doesn't always match the source's
+    rotation arrow; flip_x corrects it without re-pasting the grid."""
+    project = add_floor(client, "Level 1", 0.0)
+    floor_id = project["floors"][0]["id"]
+    calibrate(client, floor_id, metres_per_unit=0.1)
+    client.patch(f"/api/floors/{floor_id}", json={"alignment": [0, 0], "alignment2": [100, 0]})
+
+    # Row-independent values, so only the column (x) matters to the read.
+    grid = "\t-19.7\t0\t19.7\n-9.85\t0.010\t0.500\t0.030\n9.85\t0.010\t0.500\t0.030\n"
+    project = client.post("/api/scatter-maps", json={
+        "name": "Asymmetric", "plane": "plan", "coordinate_unit": "in",
+        "value_unit": "mGy", "per": "procedure", "grid": grid,
+    }).json()
+    map_id = project["scatter_maps"][0]["id"]
+    assert project["scatter_maps"][0]["flip_x"] is False
+
+    project = client.post("/api/sources", json={
+        "floor_id": floor_id, "x": 0, "y": 0, "label": "CT", "method": "ncrp147_ct",
+        "height_above_floor_m": 1.0, "rotation_deg": 0.0,
+        "params": {"scatter_method": "chart", "plan_map_id": map_id, "kvp": 125,
+                   "scatter_source": "vendor", "procedures_per_week": 1},
+    }).json()
+    source_id = project["sources"][0]["id"]
+
+    # 19.7 in east of the isocentre, i.e. along the chart's +x with no rotation.
+    offset = 19.7 * 0.0254 * 10
+    project = client.post("/api/pois", json={
+        "floor_id": floor_id, "x": offset, "y": 0, "label": "Wall",
+        "occupancy": 1.0, "area_class": "uncontrolled", "auto_height": False,
+        "height_above_floor_m": 1.0, "offset_applied": True,
+        "linked_source_ids": [source_id],
+    }).json()
+    client.post("/api/materials", json={"materials": ["lead"]})
+
+    before = client.get("/api/results").json()["results"][0]["methods"][0]["total"]
+    assert before == pytest.approx(0.030, rel=1e-6)
+
+    project = client.patch(f"/api/scatter-maps/{map_id}", json={"flip_x": True}).json()
+    assert project["scatter_maps"][0]["flip_x"] is True
+    assert "columns flipped" in project["scatter_maps"][0]["summary"]
+
+    after = client.get("/api/results").json()["results"][0]["methods"][0]["total"]
+    assert after == pytest.approx(0.010, rel=1e-6)
+
+
 def test_chart_value_is_used_as_published_on_the_same_floor(client):
     """The chart reads 0.087 mGy at that spot; no inverse-square correction."""
     chart_scenario(client)

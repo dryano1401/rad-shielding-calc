@@ -882,9 +882,18 @@ function renderScatterMaps() {
     div.className = 'map-item';
     div.innerHTML = `<div class="top"><span class="name">${escapeHtml(map.name)}</span>
       <button title="Delete chart">×</button></div>
-      <div class="detail">${escapeHtml(map.summary || '')}</div>`;
+      <div class="detail">${escapeHtml(map.summary || '')}</div>
+      <label><input type="checkbox" data-flip="flip_x" ${map.flip_x ? 'checked' : ''}>
+        Mirror left/right</label>
+      <label><input type="checkbox" data-flip="flip_y" ${map.flip_y ? 'checked' : ''}>
+        Mirror front/back</label>`;
     div.querySelector('button').onclick = async () =>
       setProject(await api(`/api/scatter-maps/${map.id}`, { method: 'DELETE' }));
+    div.querySelectorAll('input[data-flip]').forEach(input => {
+      input.onchange = async () => setProject(await send(`/api/scatter-maps/${map.id}`, 'PATCH', {
+        [input.dataset.flip]: input.checked,
+      }));
+    });
     list.appendChild(div);
   }
   if (!state.project.scatter_maps?.length) {
@@ -1708,8 +1717,14 @@ document.getElementById('map-import').onclick = async event => {
       per: document.getElementById('map-per').value,
       source: document.getElementById('map-source').value,
       grid: mapTableToGridText(),
+      // The checkboxes read "increases the natural way"; the API wants
+      // "is flipped from the natural way", so they're inverted here.
+      flip_x: !document.getElementById('map-flip-x').checked,
+      flip_y: !document.getElementById('map-flip-y').checked,
     }));
     document.getElementById('map-name').value = '';
+    document.getElementById('map-flip-x').checked = true;
+    document.getElementById('map-flip-y').checked = true;
     buildMapTable(4, 4);
     mapDialog.close();
   } catch (error) { alert(error.message); }

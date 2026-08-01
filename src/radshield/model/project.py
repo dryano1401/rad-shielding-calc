@@ -183,6 +183,11 @@ class ScatterMapData:
             is height above the isocentre.
         values: ``values[row][column]``; None for blank or "NA" cells.
         per: What each value is per, e.g. ``"procedure"``.
+        flip_x: Mirror the column axis -- a vendor's left/right convention
+            does not always match the source's rotation arrow, and pasting
+            the grid mirrored the same way every time it prints is easier
+            than transcribing it backwards.
+        flip_y: Mirror the row axis, likewise.
     """
 
     id: str
@@ -195,6 +200,8 @@ class ScatterMapData:
     x_coords: list[float] = field(default_factory=list)
     y_coords: list[float] = field(default_factory=list)
     values: list[list[float | None]] = field(default_factory=list)
+    flip_x: bool = False
+    flip_y: bool = False
 
 
 @dataclass
