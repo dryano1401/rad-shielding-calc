@@ -123,6 +123,26 @@ def test_horizontal_distance_uses_floor_scale():
     assert result.metres == pytest.approx(4.0)
 
 
+def test_same_floor_ignores_a_difference_in_entered_heights():
+    """A beam height and an occupied height are independent entries, not an
+    implied floor-to-floor gap -- only a real change of floor is that."""
+    project = build_project()
+    source = uptake_source()  # height_above_floor_m=1.0
+    poi = PointOfInterest(id="poi1", floor_id="fl1", x=40, y=0, auto_height=False,
+                          height_above_floor_m=1.7)
+    result = distance(project, source, poi)
+    assert result.vertical_m == pytest.approx(0.0)
+    assert result.metres == pytest.approx(result.horizontal_m)
+    assert any("same floor" in n for n in result.notes)
+
+    # auto_height on the same floor takes the point's own entered height too,
+    # so it is equally unaffected.
+    poi.auto_height = True
+    auto = distance(project, source, poi)
+    assert auto.vertical_m == pytest.approx(0.0)
+    assert auto.metres == pytest.approx(auto.horizontal_m)
+
+
 def test_three_dimensional_distance_combines_components():
     project = build_project()
     source = uptake_source()

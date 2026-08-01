@@ -233,14 +233,22 @@ def distance(
     same_floor = source.floor_id == poi.floor_id
     horizontal = math.hypot(px - sx, py - sy)
 
-    poi_height, height_reason = target_height(source_floor, poi_floor, poi)
-    notes.append(height_reason)
-    source_z = source_floor.elevation_m + source.height_above_floor_m
-    poi_z = poi_floor.elevation_m + poi_height
-    vertical = poi_z - source_z
-    notes.append(
-        f"source at {source_z:.2f} m, protected point at {poi_z:.2f} m above project datum"
-    )
+    if same_floor:
+        # Both heights are entered independently -- a beam height for the
+        # source, an occupied height for the point -- and are never meant to
+        # imply the point sits obliquely above or below the source. Only a
+        # floor-to-floor gap does that.
+        vertical = 0.0
+        notes.append("same floor: no vertical separation is assumed between source and point")
+    else:
+        poi_height, height_reason = target_height(source_floor, poi_floor, poi)
+        notes.append(height_reason)
+        source_z = source_floor.elevation_m + source.height_above_floor_m
+        poi_z = poi_floor.elevation_m + poi_height
+        vertical = poi_z - source_z
+        notes.append(
+            f"source at {source_z:.2f} m, protected point at {poi_z:.2f} m above project datum"
+        )
 
     if vertical_only:
         if same_floor:
@@ -281,7 +289,7 @@ def distance(
             "coincident; move one of them"
         )
 
-    if same_floor and abs(vertical) < 1e-9 and horizontal < 0.5:
+    if same_floor and horizontal < 0.5:
         warnings.append(
             f"{poi.label or poi.id!r} is only {horizontal:.2f} m from "
             f"{source.label or source.id!r}; check the placement and the floor scale"
@@ -505,10 +513,15 @@ def chart_direction(
     px, py, _ = floor_offset_m(poi_floor, poi.x, poi.y)
     east, north = px - sx, py - sy
 
-    poi_height, _ = target_height(source_floor, poi_floor, poi)
-    rise = (poi_floor.elevation_m + poi_height) - (
-        source_floor.elevation_m + source.height_above_floor_m
-    )
+    # Same as distance(): each height is entered independently and is not
+    # meant to imply a floor-to-floor gap when there isn't one.
+    if source.floor_id == poi.floor_id:
+        rise = 0.0
+    else:
+        poi_height, _ = target_height(source_floor, poi_floor, poi)
+        rise = (poi_floor.elevation_m + poi_height) - (
+            source_floor.elevation_m + source.height_above_floor_m
+        )
 
     # Rotate the horizontal offset into the chart's frame.
     angle = math.radians(source.rotation_deg)

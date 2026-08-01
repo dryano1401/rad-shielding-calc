@@ -64,6 +64,19 @@ room above, 1.7 m above the floor for the room below:
 
 For H = 4.3 m these give 3.8 m and 3.6 m, matching Examples 4 and 5.
 
+### Height is only meaningful across floors
+
+A source's height above its floor and a point's height above its own are
+entered independently -- a beam height, an occupied height -- and are not
+assumed to describe how the two line up vertically. Across floors that
+matters: it is exactly what turns a floor-to-floor gap into the 3.8 m and
+3.6 m above. On the *same* floor it does not: two entries of 1.0 m and 1.7 m
+do not mean the point is 0.7 m above the source, they are just two
+unrelated numbers, so `distance()` and `chart_direction()` both take the
+vertical separation as zero whenever the source and the point share a
+floor, regardless of what each has entered. Only a genuine change of floor
+elevation introduces a vertical component.
+
 ### Extension to isotopes TG-108 does not cover
 
 The equations are isotope-agnostic; only the constants change. Register the

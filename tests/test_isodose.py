@@ -316,6 +316,17 @@ def test_rotation_turns_the_chart_on_the_plan():
     assert bearings[180] == pytest.approx(-90.0)
 
 
+def test_same_floor_chart_read_ignores_a_difference_in_entered_heights():
+    """A source's beam height and a point's occupied height don't imply a
+    floor-to-floor gap on the same floor -- see distance()'s equivalent."""
+    project = chart_project()
+    poi = north_point(project)
+    poi.height_above_floor_m = 1.7   # differs from the source's 1.0
+    direction = chart_direction(project, project.source("ct1"), poi)
+    assert direction.distance_m == pytest.approx(4.0)
+    assert "in height" not in direction.note
+
+
 def test_rotating_the_scanner_changes_the_dose_at_a_fixed_point():
     """Turning the scanner so the table points at the wall raises the dose there."""
     project = chart_project()
