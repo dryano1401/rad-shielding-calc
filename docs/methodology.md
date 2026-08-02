@@ -100,6 +100,24 @@ Results for non-511 keV isotopes should be labelled "TG-108 method extended to
 \<isotope\>", not "TG-108" — TG-108 is a PET/PET-CT document and does not
 provide a SPECT barrier method.
 
+`register_nuclide`/`register_archer` above are the underlying primitives, used
+programmatically and by the test suite. The application itself exposes the
+same capability as an editable overlay (`radshield.physics.nuclides.upsert_record`
+/ `delete_or_reset_record`, and the "Edit isotopes…" panel in the web UI) so an
+isotope can be added, or a shipped TG-108 value corrected, without touching
+code, and have it survive a restart. Edits persist to
+`~/.radshield/custom_nuclides.json` (relocate with `RADSHIELD_HOME`) as a diff
+against the shipped tables, applied on top of them at import time; a built-in
+isotope's edits can be reset back to the shipped value, a purely custom one is
+deleted outright. **No non-511 keV isotope ships with real Archer coefficients**
+— the app has no verified, citable broad-beam fit for Tc-99m, I-131, or other
+SPECT isotopes to seed, so a new isotope's Archer fields default to the shipped
+511 keV fit purely as an editable starting point (per-material alpha/beta/gamma
+inputs, prefilled from `default_511_archer()`), not as a claim that it is
+correct for that isotope's actual photon energy. Overwrite it with real data
+and cite the source before relying on the result; the `source` field is
+carried into the record for exactly that audit purpose.
+
 ### Discrepancies found in TG-108
 
 Both were found by reproducing the report's own examples and are encoded in the

@@ -48,6 +48,7 @@ from ..model.store import load as load_project
 from ..model.store import save as save_project
 from ..physics import nuclides
 from ..physics import isodose
+from ..physics.archer import ArcherError, ArcherParams
 from ..physics.ncrp147 import tables as ncrp_tables
 from . import render
 
@@ -165,6 +166,97 @@ def options() -> dict[str, Any]:
         ],
         "known_gaps": list(ncrp_tables.KNOWN_GAPS),
     }
+
+
+def _archer_to_dict(params: ArcherParams) -> dict[str, Any]:
+    return {
+        "alpha": params.alpha,
+        "beta": params.beta,
+        "gamma": params.gamma,
+        "unit": params.unit,
+        "source": params.source,
+    }
+
+
+def _nuclide_record_to_dict(record: nuclides.NuclideRecord) -> dict[str, Any]:
+    return {
+        "name": record.name,
+        "half_life_min": record.half_life_min,
+        "gamma_eff": record.gamma_eff,
+        "gamma_patient": record.gamma_patient,
+        "is_511_kev": record.is_511_kev,
+        "source": record.source,
+        "archer": {material: _archer_to_dict(p) for material, p in record.archer.items()},
+        "is_builtin": record.is_builtin,
+        "is_customized": record.is_customized,
+    }
+
+
+@app.get("/api/nuclides")
+def list_nuclides() -> dict[str, Any]:
+    """Every registered isotope plus the 511 keV defaults new isotopes prefill from."""
+    return {
+        "nuclides": [_nuclide_record_to_dict(r) for r in nuclides.list_records()],
+        "default_511_archer": {
+            material: _archer_to_dict(p) for material, p in nuclides.default_511_archer().items()
+        },
+    }
+
+
+@app.post("/api/nuclides")
+def upsert_nuclide(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add a new isotope or edit an existing one (built-in or custom).
+
+    ``archer`` maps material name to ``{alpha, beta, gamma, unit, source}``; a
+    material omitted here has its transmission data removed from the record.
+    """
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise HTTPException(400, "isotope name is required")
+
+    archer_payload = payload.get("archer") or {}
+    if not isinstance(archer_payload, dict):
+        raise HTTPException(400, "archer must be a mapping of material to alpha/beta/gamma")
+    archer_by_material: dict[str, tuple[float, float, float, str, str]] = {}
+    for material, fit in archer_payload.items():
+        try:
+            archer_by_material[material] = (
+                float(fit["alpha"]),
+                float(fit.get("beta", 0.0)),
+                float(fit["gamma"]),
+                fit.get("unit", "cm"),
+                str(fit.get("source", "")),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(400, f"material {material!r}: invalid alpha/beta/gamma ({exc})") from exc
+
+    gamma_patient = payload.get("gamma_patient")
+    try:
+        record = nuclides.upsert_record(
+            name,
+            half_life_min=float(payload["half_life_min"]),
+            gamma_eff=float(payload["gamma_eff"]),
+            gamma_patient=float(gamma_patient) if gamma_patient not in (None, "") else None,
+            is_511_kev=bool(payload.get("is_511_kev", False)),
+            source=str(payload.get("source", "")),
+            archer_by_material=archer_by_material,
+        )
+    except (KeyError, TypeError) as exc:
+        raise HTTPException(400, f"missing or invalid field: {exc}") from exc
+    except (ValueError, ArcherError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {"nuclide": _nuclide_record_to_dict(record), "options": options()}
+
+
+@app.delete("/api/nuclides/{name}")
+def delete_nuclide(name: str) -> dict[str, Any]:
+    """Remove a custom isotope, or reset a built-in one back to its shipped default."""
+    try:
+        record = nuclides.delete_or_reset_record(name)
+    except nuclides.NuclideError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"nuclide": _nuclide_record_to_dict(record) if record else None, "options": options()}
 
 
 @app.post("/api/floors")

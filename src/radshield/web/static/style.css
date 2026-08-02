@@ -226,6 +226,20 @@ dialog textarea {
 .map-item .detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
 .map-item label { display: block; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 
+.badge {
+  font-size: 10.5px; border-radius: 4px; padding: 1px 6px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+.badge.custom { color: var(--accent); border-color: var(--accent); }
+.badge.edited { color: var(--warn); border-color: var(--warn); }
+
+#nuclide-list { max-height: 260px; overflow: auto; margin-top: 6px; }
+#nuclide-form { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+#nuc-archer-table { margin-top: 6px; }
+#nuc-archer-table th, #nuc-archer-table td { padding: 3px 5px; }
+#nuc-archer-table input { width: 100%; box-sizing: border-box; }
+#nuc-archer-table input[type=text] { min-width: 120px; }
+
 .wall .reading { font-variant-numeric: tabular-nums; }
 .wall-fields { display: flex; gap: 6px; margin-top: 5px; }
 .wall-fields label {
