@@ -1647,22 +1647,26 @@ async function calculate() {
   }
 
   const materials = payload.materials;
+  const doseUnit = quantity => quantity.includes('uSv') ? 'µSv' : 'mGy';
   let html = `<table><thead><tr>
     <th>Point</th><th>Floor</th><th>Source</th><th>Method</th>
-    <th class="num">Distance (m)</th><th class="num">Weekly</th><th class="num">B</th>
+    <th class="num">Distance (m)</th>
+    <th class="num">Unshielded</th><th class="num">Shielded</th><th class="num">B</th>
     <th class="num">% of P/T</th>
     ${materials.map(m => `<th class="num">${m} (mm)</th>`).join('')}
     <th>Status</th></tr></thead><tbody>`;
 
   for (const result of payload.results) {
     for (const contribution of result.contributions) {
+      const unit = doseUnit(contribution.quantity);
       html += `<tr class="contribution">
         <td>${escapeHtml(result.label)}</td><td>${escapeHtml(result.floor_name)}</td>
         <td>${escapeHtml(contribution.label)}</td><td>${contribution.method}</td>
         <td class="num">${contribution.distance_m.toFixed(2)}${
           contribution.geometric_distance_m
             ? ` <span class="tag need">entered</span>` : ''}</td>
-        <td class="num">${fmt(contribution.value)} ${contribution.quantity.includes('uSv') ? 'µSv' : 'mGy'}</td>
+        <td class="num">${fmt(contribution.unshielded_value)} ${unit}</td>
+        <td class="num">${fmt(contribution.value)} ${unit}</td>
         <td class="num">${contribution.path_transmission < 1
           ? `<span class="tag need">×${contribution.path_transmission.toFixed(3)}</span>` : ''}</td>
         <td class="num"></td>
@@ -1677,10 +1681,12 @@ async function calculate() {
       // P/T * (1 / required_transmission) of the design goal -- no need for
       // the goal value itself to report it as a percentage.
       const pctOfGoal = transmission === null ? 0 : 100 / transmission;
+      const unit = doseUnit(method.quantity);
       html += `<tr class="total">
         <td>${escapeHtml(result.label)}</td><td>${escapeHtml(result.floor_name)}</td>
         <td>all sources</td><td>${method.method}</td><td class="num"></td>
-        <td class="num">${fmt(method.total)} ${method.quantity.includes('uSv') ? 'µSv' : 'mGy'}</td>
+        <td class="num">${fmt(method.unshielded_total)} ${unit}</td>
+        <td class="num">${fmt(method.total)} ${unit}</td>
         <td class="num">${transmission === null || transmission > 1e6 ? '—' : transmission.toFixed(4)}</td>
         <td class="num">${pctOfGoal > 100
           ? `<span class="tag need">${pctOfGoal.toFixed(1)}%</span>`
@@ -1701,7 +1707,7 @@ async function calculate() {
       Object.entries(c.terms).map(([k, v]) => `    ${k} = ${fmt(v)}`).join('\n') +
       (c.notes.length ? `\n    ${c.notes.join('\n    ')}` : '')).join('\n\n');
     if (messages || audit) {
-      html += `<tr><td colspan="${7 + materials.length}">${messages}
+      html += `<tr><td colspan="${8 + materials.length}">${messages}
         <details><summary>Calculation detail for ${escapeHtml(result.label)}</summary>
         <pre>${escapeHtml(audit)}</pre></details></td></tr>`;
     }
