@@ -564,12 +564,32 @@ function drawPoints(floor, alpha, transform) {
     // chart is pointing: the arrow is the chart's +y, usually the table axis.
     // Must match geometry.chart_direction()'s rotation exactly -- that math
     // is what the dose calculation actually uses, so the arrow is only a
-    // trustworthy guide to setting rotation_deg if it agrees with it.
+    // trustworthy guide to setting rotation_deg if it agrees with it. That
+    // includes the floor's own alignment-derived frame (sameFloorFrame): once
+    // a floor has two alignment points, rotation_deg is interpreted relative
+    // to the line between them, not raw PDF pixel axes, so the arrow has to
+    // go through the same frame chartCellPdfPos() uses for the grid overlay
+    // -- a plain rotation_deg-as-screen-angle arrow silently drifts out of
+    // step with the calculation the moment a floor is aligned.
     if (source.method === 'ncrp147_ct' && source.params?.scatter_method === 'chart') {
-      const angle = (source.rotation_deg || 0) * Math.PI / 180;
-      const length = 34;
-      const ax = p.x - Math.sin(angle) * length;
-      const ay = p.y - Math.cos(angle) * length;
+      const lengthPx = 34;
+      let ax, ay;
+      if (floor.metres_per_unit) {
+        // Compute the tip in the source's own floor first (its own alignment
+        // frame and scale), then place() it the same way the source's own
+        // position is placed -- correct for a ghosted source on another
+        // floor too, not just the one currently being viewed.
+        const lengthM = lengthPx * floor.metres_per_unit / (RENDER_ZOOM * state.view.scale);
+        const tipPdf = chartCellPdfPos(floor, source, 0, lengthM, 'm', false, false);
+        ({ x: ax, y: ay } = place(tipPdf.x, tipPdf.y));
+      } else {
+        // No calibration yet, so there is no metre frame to go through; fall
+        // back to a raw screen-angle arrow (calculations are blocked anyway
+        // until the floor is calibrated).
+        const angle = (source.rotation_deg || 0) * Math.PI / 180;
+        ax = p.x - Math.sin(angle) * lengthPx;
+        ay = p.y - Math.cos(angle) * lengthPx;
+      }
       ctx.save();
       ctx.strokeStyle = '#ff8a3d';
       ctx.lineWidth = 2;
