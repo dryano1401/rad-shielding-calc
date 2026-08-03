@@ -167,7 +167,12 @@ K1 values are unshielded air kerma **per patient at 1 m**, in mGy. The design
 goal P is in mGy air kerma per week: 0.02 uncontrolled, 0.1 controlled.
 
 Point of protection is 0.3 m beyond the distal barrier surface. That offset is
-a geometry-layer concern, not applied inside the physics functions.
+a geometry-layer concern, not applied inside the physics functions. It applies
+to TG-108 sources too, not just NCRP 147 ones: TG-108's own default
+source-to-wall/floor distances are themselves drawn from NCRP guidance, so
+there is no separate "TG-108 doesn't need this" convention to carve out. A
+point's "NCRP standoff already applied" checkbox governs every source linked
+to it, regardless of method.
 
 ### Shipped tables
 

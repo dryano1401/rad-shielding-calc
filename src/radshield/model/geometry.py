@@ -12,7 +12,9 @@ is a modelling choice a reviewer may want to check:
 3. **Height conventions.** TG-108 Fig. 5 places the source 1 m above its floor
    and the protected point 0.5 m above the floor above, or 1.7 m above the
    floor below.  NCRP 147 places the point of protection 0.3 m beyond the
-   barrier.
+   barrier -- and TG-108's own default source-to-wall/floor distances are
+   drawn from the same NCRP guidance, so this standoff applies to both
+   methodologies alike, not just NCRP 147 sources.
 """
 
 from __future__ import annotations
@@ -207,8 +209,10 @@ def distance(
         source: The source point.
         poi: The protected point.
         apply_ncrp_standoff: Add the 0.3 m NCRP 147 standoff when the placed
-            coordinate marks the barrier rather than the protected point.  The
-            caller passes ``not poi.offset_applied`` for NCRP 147 sources.
+            coordinate marks the barrier rather than the protected point.
+            Applies to every source, TG-108 included -- TG-108's own default
+            distances are drawn from the same NCRP guidance -- so the caller
+            passes ``not poi.offset_applied`` regardless of source method.
         vertical_only: Ignore horizontal separation.  Appropriate for a point
             directly above or below the source, which is what TG-108's floor
             and ceiling examples assume.

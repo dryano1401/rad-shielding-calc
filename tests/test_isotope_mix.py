@@ -22,8 +22,11 @@ def mixed_source(**overrides) -> SourcePoint:
 
 
 def poi_above(project):
+    # offset_applied=True: this point marks the exact TG-108 Example 4
+    # location, not a barrier surface, so the NCRP standoff should not be
+    # added on top of it.
     poi = PointOfInterest(id="poi1", floor_id="fl2", x=0, y=0, auto_height=True,
-                          occupancy=1.0, linked_source_ids=["src1"])
+                          occupancy=1.0, linked_source_ids=["src1"], offset_applied=True)
     project.pois.append(poi)
     return poi
 

@@ -174,6 +174,9 @@ def test_full_workflow_produces_results_and_csv(client):
         "floor_id": upper, "x": 0, "y": 0, "label": "Office above",
         "occupancy": 1.0, "area_class": "uncontrolled",
         "auto_height": True, "linked_source_ids": [source_id],
+        # This point marks Example 4's own stated distance, not a barrier
+        # surface, so the NCRP standoff should not stack on top of it.
+        "offset_applied": True,
     }).json()
     assert not project["problems"]
 
@@ -344,6 +347,9 @@ def two_floor_setup(client):
         "floor_id": upper, "x": 0, "y": 0, "label": "Office above",
         "occupancy": 1.0, "area_class": "uncontrolled", "auto_height": True,
         "linked_source_ids": [source_id],
+        # This point marks the exact 3.8 m test geometry, not a barrier
+        # surface, so the NCRP standoff should not stack on top of it.
+        "offset_applied": True,
     }).json()
     return project["pois"][0]["id"], source_id
 
