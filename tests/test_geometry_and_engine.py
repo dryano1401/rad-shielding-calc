@@ -223,6 +223,8 @@ def test_engine_reproduces_example_4_end_to_end():
     assert not result.errors
     method = result.methods[0]
     assert method.total == pytest.approx(117.0, rel=0.01)
+    # No walls on this path, so the unshielded and shielded totals coincide.
+    assert method.unshielded_total == pytest.approx(method.total)
     assert method.required_transmission == pytest.approx(0.17, rel=0.02)
     # 1.3 cm of lead, reported in millimetres.
     assert result.governing_thickness_mm["lead"] == pytest.approx(12.5, abs=1.5)
@@ -298,6 +300,13 @@ def test_mixed_methodologies_are_summed():
     assert any("summed" in w for w in result.warnings)
 
     combined = next(m for m in result.methods if m.method == "combined")
+    tg108_method = next(m for m in result.methods if m.method == "tg108")
+    ncrp147_method = next(m for m in result.methods if m.method == "ncrp147")
+    # 1 uGy = 1 uSv for these photon energies, so the combined unshielded
+    # total is the plain sum once NCRP 147's mGy is converted to uSv.
+    assert combined.unshielded_total == pytest.approx(
+        tg108_method.unshielded_total + ncrp147_method.unshielded_total * 1000.0
+    )
     per_method = [m.thickness_mm.get("lead", 0.0) for m in result.methods if m.method != "combined"]
     # At the thicker of the two independent requirements, the methodology
     # that set it is exactly at the weekly goal by construction; the other

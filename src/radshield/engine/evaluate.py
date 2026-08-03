@@ -67,7 +67,15 @@ class SourceContribution:
 
 @dataclass
 class MethodResult:
-    """Solved requirement for one methodology at one point."""
+    """Solved requirement for one methodology at one point.
+
+    ``total`` is the summed dose as things currently stand -- attenuated by
+    whatever walls the floor plan already shows crossing each source's path,
+    but not by the ``thickness_mm`` this same result proposes adding.
+    ``unshielded_total`` is the same sum with no attenuation at all, the sum
+    of every contribution's own ``unshielded_value``; the ratio of the two is
+    what the existing walls are already buying.
+    """
 
     method: str
     quantity: str
@@ -75,6 +83,7 @@ class MethodResult:
     required_transmission: float
     thickness_mm: dict[str, float] = field(default_factory=dict)
     unavailable: dict[str, str] = field(default_factory=dict)
+    unshielded_total: float = 0.0
 
 
 @dataclass
@@ -392,9 +401,11 @@ def _solve_tg108(
 
     contributions: list[SourceContribution] = []
     total = 0.0
+    unshielded_total = 0.0
     for src, dist in pairs:
         components = _tg108_components(src)
         combined = tg108.combined_weekly_dose(components, dist.metres)
+        unshielded_total += combined.weekly_dose_uSv
         crossings, geometry_warnings = path_barriers(
             project, src, poi, apply_obliquity=project.apply_obliquity
         )
@@ -467,6 +478,7 @@ def _solve_tg108(
             required_transmission=b_required,
             thickness_mm=thickness_mm,
             unavailable=unavailable,
+            unshielded_total=unshielded_total,
         ),
         contributions,
         attenuation_nuclide,
@@ -541,6 +553,7 @@ def _solve_ncrp147(
         )
 
     total = sum(c.value for c in contributions)
+    unshielded_total = sum(c.unshielded_value for c in contributions)
     b_required = float("inf") if total <= 0 else goal.value / (poi.occupancy * total)
 
     thickness_mm: dict[str, float] = {}
@@ -573,6 +586,7 @@ def _solve_ncrp147(
             required_transmission=b_required,
             thickness_mm=thickness_mm,
             unavailable=unavailable,
+            unshielded_total=unshielded_total,
         ),
         contributions,
     )
@@ -722,6 +736,9 @@ def _solve_combined(
             thickness_mm[material] = max(gross - _existing_credit_mm(poi, material, "mm"), 0.0)
 
     combined_total_uSv = tg108_result.total + ncrp147_result.total * 1000.0
+    combined_unshielded_uSv = (
+        tg108_result.unshielded_total + ncrp147_result.unshielded_total * 1000.0
+    )
     return MethodResult(
         method="combined",
         quantity="TG-108 + NCRP 147 combined (uSv/week; 1 uGy = 1 uSv)",
@@ -732,6 +749,7 @@ def _solve_combined(
         ),
         thickness_mm=thickness_mm,
         unavailable=unavailable,
+        unshielded_total=combined_unshielded_uSv,
     )
 
 
@@ -1049,6 +1067,7 @@ def results_to_rows(results: list[PointResult], materials: list[str]) -> list[di
                 "distance_m": "",
                 "quantity": method.quantity,
                 "value": round(method.total, 4),
+                "unshielded_value": round(method.unshielded_total, 4),
                 "occupancy": res.occupancy,
                 "area_class": res.area_class,
                 "required_transmission": (

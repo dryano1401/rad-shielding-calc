@@ -236,6 +236,9 @@ def test_a_wall_reduces_the_dose_and_the_required_thickness():
 
     assert shielded < unshielded
     assert result.governing_thickness_mm["lead"] < required_bare
+    # The wall reduces the shielded total, but not the unshielded one -- it
+    # is the same source at the same distance, just now with a wall in the way.
+    assert result.methods[0].unshielded_total == pytest.approx(unshielded)
     contribution = result.contributions[0]
     assert contribution.unshielded_value == pytest.approx(unshielded)
     assert contribution.path_transmission < 1.0
