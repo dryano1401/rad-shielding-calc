@@ -114,8 +114,15 @@ def _project_payload() -> dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    """Serve the single-page application."""
-    return HTMLResponse((STATIC_DIR / "index.html").read_text())
+    """Serve the single-page application.
+
+    Read explicitly as UTF-8 -- the file is UTF-8 (it has real "…", "×", "µ"
+    and "↺" characters in it) but ``Path.read_text()`` without an explicit
+    encoding falls back to the platform's default, which on Windows is
+    typically cp1252. That silently mangles every non-ASCII character into
+    mojibake rather than raising, so it only shows up as garbled button text.
+    """
+    return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
 
 
 @app.get("/favicon.ico", include_in_schema=False)

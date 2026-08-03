@@ -272,8 +272,8 @@ def load_custom_overlay(path: Path | None = None) -> None:
     if not target.exists():
         return
     try:
-        payload = json.loads(target.read_text())
-    except (OSError, json.JSONDecodeError):
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return
     for entry in payload.get("nuclides", []):
         try:
@@ -286,7 +286,7 @@ def _save_custom_overlay(path: Path | None = None) -> None:
     target = path or _custom_store_path()
     customized = [_nuclide_to_dict(name) for name in sorted(_registry) if _is_customized(name)]
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({"nuclides": customized}, indent=2))
+    target.write_text(json.dumps({"nuclides": customized}, indent=2), encoding="utf-8")
 
 
 def _apply_record(entry: dict) -> None:

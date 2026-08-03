@@ -82,7 +82,20 @@ def test_render_rejects_bad_page_and_zoom():
 
 
 def test_index_and_options(client):
-    assert client.get("/").status_code == 200
+    response = client.get("/")
+    assert response.status_code == 200
+    # The page is read from disk and re-served as text, unlike the
+    # StaticFiles-mounted JS/CSS which stream raw bytes untouched -- reading
+    # it without an explicit encoding decodes UTF-8 as the platform default
+    # (cp1252 on Windows) and mangles every non-ASCII character into
+    # mojibake without ever raising, so this has to be checked for real
+    # characters rather than just a 200 status.
+    assert "text/html" in response.headers["content-type"]
+    assert "charset=utf-8" in response.headers["content-type"].lower()
+    assert "Import chart…" in response.text
+    assert "Edit isotopes…" in response.text
+    assert "µSv" in response.text
+
     options = client.get("/api/options").json()
     assert "F-18" in options["nuclides"]
     assert any("Rad Room" in w for w in options["workloads"])
