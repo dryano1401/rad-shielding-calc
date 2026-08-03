@@ -24,6 +24,8 @@ const state = {
   ghost: false,
   showChartGrid: false,     // debug overlay of a selected chart's grid values
   resultsCollapsed: false,
+  nuclides: null,           // /api/nuclides payload: every registered isotope
+  nuclideDefault511: null,  // Archer fit new isotopes prefill from, per material
 };
 
 const canvas = document.getElementById('plan');
@@ -1853,6 +1855,150 @@ function mapTableToGridText() {
   return lines.join('\n');
 }
 
+/* ------------------------------------------------------------- isotopes */
+
+function renderNuclideSummary() {
+  const box = document.getElementById('nuclide-summary');
+  const n = (state.nuclides || []).length;
+  box.textContent = n ? `${n} isotope${n === 1 ? '' : 's'} registered.` : 'Loading…';
+}
+
+async function refreshNuclides() {
+  const payload = await api('/api/nuclides');
+  state.nuclides = payload.nuclides;
+  state.nuclideDefault511 = payload.default_511_archer;
+  renderNuclideSummary();
+}
+
+function nuclideBadge(record) {
+  if (!record.is_builtin) return '<span class="badge custom">custom</span>';
+  return record.is_customized
+    ? '<span class="badge edited">edited</span>'
+    : '<span class="badge builtin">built-in</span>';
+}
+
+function renderNuclideList() {
+  const list = document.getElementById('nuclide-list');
+  list.innerHTML = '';
+  for (const record of (state.nuclides || [])) {
+    const materials = Object.keys(record.archer).sort();
+    const div = document.createElement('div');
+    div.className = 'map-item';
+    div.innerHTML = `
+      <div class="top">
+        <span class="name">${escapeHtml(record.name)}</span>
+        ${nuclideBadge(record)}
+        <button type="button" data-nuc="edit" title="Edit">Edit</button>
+        <button type="button" data-nuc="delete" title="${record.is_builtin ? 'Reset to shipped default' : 'Delete'}">
+          ${record.is_builtin ? '↺' : '×'}
+        </button>
+      </div>
+      <div class="detail">
+        t½ ${fmt(record.half_life_min)} min &middot;
+        &gamma; ${fmt(record.gamma_eff)} µSv m² / MBq h
+        ${materials.length ? `&middot; Archer: ${materials.join(', ')}` : '&middot; no Archer data yet'}
+      </div>
+      ${record.source ? `<div class="detail">${escapeHtml(record.source)}</div>` : ''}`;
+    div.querySelector('[data-nuc=edit]').onclick = () => openNuclideForm(record);
+    div.querySelector('[data-nuc=delete]').onclick = async () => {
+      if (!record.is_builtin && !confirm(`Delete isotope ${record.name}? This cannot be undone.`)) return;
+      try {
+        const body = await api(`/api/nuclides/${encodeURIComponent(record.name)}`, { method: 'DELETE' });
+        state.options = body.options;
+        await refreshNuclides();
+        renderNuclideList();
+        renderAll();
+      } catch (error) { alert(error.message); }
+    };
+    list.appendChild(div);
+  }
+  if (!state.nuclides?.length) list.innerHTML = '<p class="hint">No isotopes registered.</p>';
+}
+
+function buildArcherRows(archerByMaterial) {
+  const tbody = document.getElementById('nuc-archer-rows');
+  tbody.innerHTML = '';
+  for (const material of (state.options?.materials || [])) {
+    const fit = archerByMaterial?.[material];
+    const tr = document.createElement('tr');
+    tr.dataset.material = material;
+    tr.innerHTML = `
+      <td>${material}</td>
+      <td><input type="number" step="any" data-am="alpha" value="${fit ? fit.alpha : ''}"></td>
+      <td><input type="number" step="any" data-am="beta" value="${fit ? fit.beta : ''}"></td>
+      <td><input type="number" step="any" data-am="gamma" value="${fit ? fit.gamma : ''}"></td>
+      <td><input type="text" data-am="source" value="${escapeHtml(fit?.source || '')}"></td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function collectArcherRows() {
+  const archer = {};
+  document.querySelectorAll('#nuc-archer-rows tr').forEach(tr => {
+    const alpha = tr.querySelector('[data-am=alpha]').value.trim();
+    if (!alpha) return;
+    archer[tr.dataset.material] = {
+      alpha: parseFloat(alpha),
+      beta: parseFloat(tr.querySelector('[data-am=beta]').value || '0'),
+      gamma: parseFloat(tr.querySelector('[data-am=gamma]').value || '1'),
+      unit: 'cm',
+      source: tr.querySelector('[data-am=source]').value.trim(),
+    };
+  });
+  return archer;
+}
+
+function openNuclideForm(record) {
+  document.getElementById('nuclide-form-title').textContent = record ? `Edit ${record.name}` : 'Add isotope';
+  const nameField = document.getElementById('nuc-name');
+  nameField.value = record ? record.name : '';
+  // Editing keeps the same key so the edit lands on the existing record
+  // instead of registering a same-looking second isotope alongside it.
+  nameField.disabled = !!record;
+  document.getElementById('nuc-halflife').value = record ? record.half_life_min : '';
+  document.getElementById('nuc-gamma-eff').value = record ? record.gamma_eff : '';
+  document.getElementById('nuc-gamma-patient').value = record?.gamma_patient ?? '';
+  document.getElementById('nuc-511').checked = record ? record.is_511_kev : true;
+  document.getElementById('nuc-source').value = record?.source || '';
+  // A new isotope starts from the 511 keV fit -- the only shielding dataset
+  // this app ships -- as a scaffold the user overwrites with real data.
+  buildArcherRows(record ? record.archer : state.nuclideDefault511);
+  document.getElementById('nuclide-form').hidden = false;
+}
+
+document.getElementById('btn-add-nuclide').onclick = () => openNuclideForm(null);
+document.getElementById('nuc-cancel').onclick = () => { document.getElementById('nuclide-form').hidden = true; };
+
+document.getElementById('nuc-save').onclick = async () => {
+  const name = document.getElementById('nuc-name').value.trim();
+  if (!name) { alert('Isotope name is required.'); return; }
+  const gammaPatientRaw = document.getElementById('nuc-gamma-patient').value.trim();
+  try {
+    const body = await send('/api/nuclides', 'POST', {
+      name,
+      half_life_min: parseFloat(document.getElementById('nuc-halflife').value),
+      gamma_eff: parseFloat(document.getElementById('nuc-gamma-eff').value),
+      gamma_patient: gammaPatientRaw ? parseFloat(gammaPatientRaw) : null,
+      is_511_kev: document.getElementById('nuc-511').checked,
+      source: document.getElementById('nuc-source').value.trim(),
+      archer: collectArcherRows(),
+    });
+    state.options = body.options;
+    document.getElementById('nuclide-form').hidden = true;
+    await refreshNuclides();
+    renderNuclideList();
+    renderAll();
+  } catch (error) { alert(error.message); }
+};
+
+const nuclideDialog = document.getElementById('nuclide-dialog');
+document.getElementById('btn-edit-nuclides').onclick = async () => {
+  try { await refreshNuclides(); } catch (error) { alert(error.message); return; }
+  renderNuclideList();
+  document.getElementById('nuclide-form').hidden = true;
+  nuclideDialog.showModal();
+};
+
 const mapDialog = document.getElementById('map-dialog');
 document.getElementById('btn-add-map').onclick = () => { buildMapTable(4, 4); mapDialog.showModal(); };
 document.getElementById('map-add-col').onclick = () => { const d = mapTableDims(); mapTableEnsureSize(d.rows, d.cols + 1); };
@@ -1951,6 +2097,7 @@ window.addEventListener('resize', () => draw());
 
 (async function start() {
   state.options = await api('/api/options');
+  await refreshNuclides();
   setProject(await api('/api/project'));
   document.getElementById('project-name').value = state.project.name;
   document.getElementById('display-unit').value = displayUnit();

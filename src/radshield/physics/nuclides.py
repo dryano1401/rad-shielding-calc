@@ -18,9 +18,12 @@ after which every TG-108-style calculation works unchanged.
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
-from .archer import ArcherParams
+from .archer import ArcherError, ArcherParams
 from .data_loader import load_table
 
 # Ratio of the patient-self-attenuated dose-rate constant to the free-in-air
@@ -102,6 +105,12 @@ def _load_builtin() -> None:
 
 
 _load_builtin()
+
+# Pristine snapshot of the shipped TG-108 tables, captured before any
+# user-editable overlay is applied.  This is what "reset to default" restores
+# and what distinguishes a user edit from the original value.
+_BUILTIN_NUCLIDES: dict[str, Nuclide] = dict(_registry)
+_BUILTIN_ARCHER: dict[tuple[str, str], ArcherParams] = dict(_archer)
 
 
 def get_nuclide(name: str) -> Nuclide:
@@ -193,3 +202,263 @@ def patient_dose_rate_constant(nuclide: str) -> tuple[float, str]:
         f"derived: gamma_eff {nuc.gamma_eff} x F-18 patient-attenuation ratio "
         f"{_F18_PATIENT_ATTENUATION_RATIO:.4f} (TG-108 0.092/0.143)"
     )
+
+
+# --- Editable overlay -------------------------------------------------------
+#
+# Everything above this line is read-only, shipped-with-the-package data. The
+# functions below let the running application add isotopes TG-108 does not
+# cover, or correct a shipped value, and have that edit survive a restart --
+# without ever touching the packaged CSVs (which stay the auditable, diffable
+# record of what TG-108 itself says). Edits are stored as a JSON overlay,
+# applied on top of the builtin tables at import time, keyed by nuclide name.
+# Because the overlay is applied after ``_load_builtin`` but the pristine
+# values were already snapshotted into ``_BUILTIN_*`` above, a user edit can
+# always be told apart from a shipped default and reset back to it.
+
+
+def _custom_store_path() -> Path:
+    """Location of the user-editable overlay file.
+
+    Defaults to ``~/.radshield/custom_nuclides.json``; set ``RADSHIELD_HOME``
+    to relocate it (tests use this to avoid touching a real home directory).
+    """
+    base = os.environ.get("RADSHIELD_HOME")
+    return (Path(base) if base else Path.home() / ".radshield") / "custom_nuclides.json"
+
+
+def _nuclide_to_dict(name: str) -> dict:
+    nuc = _registry[name]
+    return {
+        "name": nuc.name,
+        "half_life_min": nuc.half_life_min,
+        "gamma_eff": nuc.gamma_eff,
+        "gamma_patient": nuc.gamma_patient,
+        "is_511_kev": nuc.is_511_kev,
+        "source": nuc.source,
+        "archer": {
+            material: {
+                "alpha": params.alpha,
+                "beta": params.beta,
+                "gamma": params.gamma,
+                "unit": params.unit,
+                "source": params.source,
+            }
+            for (n, material), params in _archer.items()
+            if n == name
+        },
+    }
+
+
+def _is_customized(name: str) -> bool:
+    """True if ``name``'s current values differ from the shipped defaults."""
+    if _registry.get(name) != _BUILTIN_NUCLIDES.get(name):
+        return True
+    materials = {m for n, m in _archer if n == name}
+    builtin_materials = {m for n, m in _BUILTIN_ARCHER if n == name}
+    if materials != builtin_materials:
+        return True
+    return any(_archer[(name, m)] != _BUILTIN_ARCHER.get((name, m)) for m in materials)
+
+
+def load_custom_overlay(path: Path | None = None) -> None:
+    """Apply a persisted overlay on top of the builtin tables.
+
+    Silently does nothing if the file is absent, empty, or unreadable -- a
+    corrupt overlay should not prevent the application from starting with
+    the shipped defaults.
+    """
+    target = path or _custom_store_path()
+    if not target.exists():
+        return
+    try:
+        payload = json.loads(target.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    for entry in payload.get("nuclides", []):
+        try:
+            _apply_record(entry)
+        except (KeyError, TypeError, ValueError, ArcherError):
+            continue  # skip a malformed entry rather than fail application startup
+
+
+def _save_custom_overlay(path: Path | None = None) -> None:
+    target = path or _custom_store_path()
+    customized = [_nuclide_to_dict(name) for name in sorted(_registry) if _is_customized(name)]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"nuclides": customized}, indent=2))
+
+
+def _apply_record(entry: dict) -> None:
+    name = str(entry["name"])
+    half_life_min = float(entry["half_life_min"])
+    gamma_eff = float(entry["gamma_eff"])
+    if half_life_min <= 0:
+        raise ValueError("half_life_min must be positive")
+    if gamma_eff <= 0:
+        raise ValueError("gamma_eff must be positive")
+    gamma_patient = entry.get("gamma_patient")
+    nuc = Nuclide(
+        name=name,
+        half_life_min=half_life_min,
+        gamma_eff=gamma_eff,
+        gamma_patient=float(gamma_patient) if gamma_patient is not None else None,
+        is_511_kev=bool(entry.get("is_511_kev", False)),
+        source=str(entry.get("source", "")),
+    )
+    register_nuclide(nuc, overwrite=True)
+    for key in [k for k in _archer if k[0] == name]:
+        del _archer[key]
+    for material, params in entry.get("archer", {}).items():
+        register_archer(
+            name,
+            ArcherParams(
+                alpha=float(params["alpha"]),
+                beta=float(params["beta"]),
+                gamma=float(params["gamma"]),
+                unit=params.get("unit", "cm"),
+                material=material,
+                source=str(params.get("source", "")),
+            ),
+            overwrite=True,
+        )
+
+
+@dataclass(frozen=True)
+class NuclideRecord:
+    """A full isotope record for the editor UI: constants plus every material's fit.
+
+    Attributes:
+        is_builtin: True if this name ships with the package (TG-108 Table II).
+        is_customized: True if the current values differ from the shipped
+            default -- irrelevant (always False) for a name that is not builtin.
+    """
+
+    name: str
+    half_life_min: float
+    gamma_eff: float
+    gamma_patient: float | None
+    is_511_kev: bool
+    source: str
+    archer: dict[str, ArcherParams]
+    is_builtin: bool
+    is_customized: bool
+
+
+def list_records() -> list[NuclideRecord]:
+    """Every registered isotope, builtin or custom, for the editor UI."""
+    records = []
+    for name in sorted(_registry):
+        nuc = _registry[name]
+        archer = {m: p for (n, m), p in _archer.items() if n == name}
+        records.append(
+            NuclideRecord(
+                name=name,
+                half_life_min=nuc.half_life_min,
+                gamma_eff=nuc.gamma_eff,
+                gamma_patient=nuc.gamma_patient,
+                is_511_kev=nuc.is_511_kev,
+                source=nuc.source,
+                archer=archer,
+                is_builtin=name in _BUILTIN_NUCLIDES,
+                is_customized=_is_customized(name),
+            )
+        )
+    return records
+
+
+def default_511_archer() -> dict[str, ArcherParams]:
+    """The shipped 511 keV Table V fit, keyed by material.
+
+    Every positron emitter registered from ``tg108_archer_511kev.csv`` shares
+    an identical fit, so F-18's is representative. This is what a new
+    isotope's Archer fields default to in the editor -- a reasonable starting
+    point that the user overwrites with isotope-specific data when they have
+    it, per the 511 keV annihilation photon being the common case this
+    application was built around.
+    """
+    return {m: p for (n, m), p in _BUILTIN_ARCHER.items() if n == "F-18"}
+
+
+def upsert_record(
+    name: str,
+    *,
+    half_life_min: float,
+    gamma_eff: float,
+    gamma_patient: float | None,
+    is_511_kev: bool,
+    source: str,
+    archer_by_material: dict[str, tuple[float, float, float, str, str]],
+) -> NuclideRecord:
+    """Add or edit an isotope, persisting the change to the overlay file.
+
+    Args:
+        archer_by_material: material name -> ``(alpha, beta, gamma, unit, source)``.
+            A material omitted here has its transmission data removed.
+
+    Raises:
+        ValueError: If a physical constant is non-positive.
+        ArcherError: If a material's alpha or gamma is non-positive.
+    """
+    if half_life_min <= 0:
+        raise ValueError(f"half_life_min must be positive, got {half_life_min}")
+    if gamma_eff <= 0:
+        raise ValueError(f"gamma_eff must be positive, got {gamma_eff}")
+    if gamma_patient is not None and gamma_patient <= 0:
+        raise ValueError(f"gamma_patient must be positive, got {gamma_patient}")
+
+    nuc = Nuclide(
+        name=name,
+        half_life_min=half_life_min,
+        gamma_eff=gamma_eff,
+        gamma_patient=gamma_patient,
+        is_511_kev=is_511_kev,
+        source=source,
+    )
+    register_nuclide(nuc, overwrite=True)
+    for key in [k for k in _archer if k[0] == name]:
+        del _archer[key]
+    for material, (alpha, beta, gamma, unit, material_source) in archer_by_material.items():
+        register_archer(
+            name,
+            ArcherParams(
+                alpha=alpha, beta=beta, gamma=gamma,
+                unit=unit, material=material, source=material_source,
+            ),
+            overwrite=True,
+        )
+    _save_custom_overlay()
+    return next(r for r in list_records() if r.name == name)
+
+
+def delete_or_reset_record(name: str) -> NuclideRecord | None:
+    """Remove a custom isotope, or reset a builtin one back to its shipped default.
+
+    Returns:
+        The restored :class:`NuclideRecord` if ``name`` is builtin (now back
+        to shipped values), or ``None`` if it was a purely custom isotope that
+        has now been removed entirely.
+
+    Raises:
+        NuclideError: If ``name`` is not currently registered.
+    """
+    if name not in _registry:
+        raise NuclideError(f"nuclide {name!r} is not registered; known: {sorted(_registry)}")
+
+    for key in [k for k in _archer if k[0] == name]:
+        del _archer[key]
+
+    if name in _BUILTIN_NUCLIDES:
+        _registry[name] = _BUILTIN_NUCLIDES[name]
+        for (n, m), p in _BUILTIN_ARCHER.items():
+            if n == name:
+                _archer[(n, m)] = p
+        _save_custom_overlay()
+        return next(r for r in list_records() if r.name == name)
+
+    del _registry[name]
+    _save_custom_overlay()
+    return None
+
+
+load_custom_overlay()

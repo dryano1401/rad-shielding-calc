@@ -81,6 +81,14 @@
     </section>
 
     <section>
+      <h2>Isotopes</h2>
+      <p class="hint">Half-life, dose-rate constant and Archer shielding fit for
+        every isotope TG-108-style sources can use.</p>
+      <div id="nuclide-summary" class="hint"></div>
+      <button id="btn-edit-nuclides" class="wide">Edit isotopes…</button>
+    </section>
+
+    <section>
       <h2>Report materials</h2>
       <div id="material-list" class="checks"></div>
     </section>
@@ -202,6 +210,57 @@
     <div class="dialog-actions">
       <button value="cancel">Cancel</button>
       <button id="map-import" value="import">Import</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="nuclide-dialog">
+  <form method="dialog">
+    <h2>Isotope library</h2>
+    <p class="hint">Physical constants and per-material Archer broad-beam fit
+      (alpha, beta in 1/cm; gamma dimensionless) for every isotope a TG-108-style
+      source can use. Built-in TG-108 values can be edited and reset back to the
+      shipped default. A new isotope's Archer fields start out copied from the
+      511 keV fit — the one shielding dataset this app ships — as a starting
+      point; overwrite them with isotope-specific data when you have it, and
+      record where it came from.</p>
+    <div id="nuclide-list"></div>
+    <button type="button" id="btn-add-nuclide" class="wide">+ Add isotope</button>
+
+    <div id="nuclide-form" hidden>
+      <h3 id="nuclide-form-title">Add isotope</h3>
+      <div class="row">
+        <label>Name<input id="nuc-name" type="text" placeholder="Tc-99m"></label>
+        <label>Half-life (min)<input id="nuc-halflife" type="number" step="any" min="0"></label>
+      </div>
+      <div class="row">
+        <label>Dose-rate constant, free in air (µSv m² / MBq h)
+          <input id="nuc-gamma-eff" type="number" step="any" min="0"></label>
+        <label>Patient-attenuated constant (optional)
+          <input id="nuc-gamma-patient" type="number" step="any" min="0"></label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="nuc-511"> Emits the 511 keV annihilation
+          photon (lets the F-18 patient-attenuation ratio be borrowed when no
+          patient-attenuated constant is given above)</label>
+      </div>
+      <div class="row">
+        <label>Source / citation<input id="nuc-source" type="text"
+          placeholder="e.g. TG-108 Table II, or your own fit"></label>
+      </div>
+      <p class="hint">Leave a material's alpha blank to omit transmission data for it.</p>
+      <table id="nuc-archer-table">
+        <thead><tr><th>Material</th><th>alpha</th><th>beta</th><th>gamma</th><th>Source</th></tr></thead>
+        <tbody id="nuc-archer-rows"></tbody>
+      </table>
+      <div class="dialog-actions">
+        <button type="button" id="nuc-cancel">Cancel</button>
+        <button type="button" id="nuc-save">Save</button>
+      </div>
+    </div>
+
+    <div class="dialog-actions">
+      <button value="close">Close</button>
     </div>
   </form>
 </dialog>
