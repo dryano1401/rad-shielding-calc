@@ -794,9 +794,12 @@ def evaluate_point(project: Project, poi: PointOfInterest) -> PointResult:
                 project,
                 source,
                 poi,
-                apply_ncrp_standoff=(
-                    source.method != "tg108" and not poi.offset_applied
-                ),
+                # TG-108 has no standoff convention of its own; its default
+                # source-to-wall/floor distances are drawn directly from NCRP
+                # guidance, so the same 0.3 m point-of-protection standoff
+                # applies to it too, unless this point's offset is already
+                # applied.
+                apply_ncrp_standoff=not poi.offset_applied,
                 override_m=poi.distance_overrides.get(source_id),
             )
         except Exception as exc:  # geometry problems are reported, not raised
@@ -948,13 +951,13 @@ def describe_distances(project: Project) -> list[dict[str, Any]]:
                     project,
                     source,
                     poi,
-                    apply_ncrp_standoff=(source.method != "tg108" and not poi.offset_applied),
+                    apply_ncrp_standoff=not poi.offset_applied,
                 )
                 used = distance(
                     project,
                     source,
                     poi,
-                    apply_ncrp_standoff=(source.method != "tg108" and not poi.offset_applied),
+                    apply_ncrp_standoff=not poi.offset_applied,
                     override_m=poi.distance_overrides.get(source_id),
                 )
             except Exception as exc:

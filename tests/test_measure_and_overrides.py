@@ -125,7 +125,8 @@ def test_override_changes_the_calculated_dose():
     project = build_project()
     project.sources.append(uptake_source())
     poi = PointOfInterest(
-        id="poi1", floor_id="fl2", x=0, y=0, auto_height=True, linked_source_ids=["src1"]
+        id="poi1", floor_id="fl2", x=0, y=0, auto_height=True, linked_source_ids=["src1"],
+        offset_applied=True,
     )
     project.pois.append(poi)
 
@@ -146,7 +147,7 @@ def test_describe_distances_reports_components_and_overrides():
     project.pois.append(
         PointOfInterest(id="poi1", floor_id="fl2", x=40, y=0, label="Office",
                         auto_height=True, linked_source_ids=["src1"],
-                        distance_overrides={"src1": 6.0})
+                        distance_overrides={"src1": 6.0}, offset_applied=True)
     )
     report = describe_distances(project)
     link = report[0]["links"][0]
@@ -164,7 +165,7 @@ def test_describe_distances_reports_per_link_errors_without_aborting():
     project.sources.append(uptake_source())
     project.pois.append(
         PointOfInterest(id="poi1", floor_id="fl2", x=0, y=0, auto_height=True,
-                        linked_source_ids=["src1", "ghost"])
+                        linked_source_ids=["src1", "ghost"], offset_applied=True)
     )
     links = describe_distances(project)[0]["links"]
     assert links[0]["distance_m"] == pytest.approx(3.8)

@@ -194,6 +194,45 @@ def test_ncrp_standoff_added_when_offset_not_applied():
     assert any("standoff" in note for note in with_standoff.notes)
 
 
+def test_standoff_applies_to_tg108_sources_too():
+    """TG-108's own default distances are drawn from NCRP guidance, so the
+    0.3 m point-of-protection standoff is not an NCRP-147-only concept -- a
+    TG-108 source and an NCRP 147 source at the same spot must read the same
+    distance to a point once the standoff is (or isn't) accounted for.
+    """
+    project = build_project()
+    tg108 = uptake_source(x=0, y=0)
+    ncrp = SourcePoint(
+        id="src2", floor_id="fl1", x=0, y=0, method="ncrp147",
+        params={"workload": "Rad Room (all barriers)", "barrier_type": "secondary"},
+    )
+    project.sources.extend([tg108, ncrp])
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl1", x=30, y=0, auto_height=False, height_above_floor_m=1.0,
+        offset_applied=False, linked_source_ids=["src1", "src2"],
+    )
+    project.pois.append(poi)
+
+    bare = distance(project, tg108, poi, apply_ncrp_standoff=False)
+
+    result = evaluate_point(project, poi)
+    by_id = {c.source_id: c for c in result.contributions}
+    # Co-located sources on the same floor: bare geometry is identical, so the
+    # two contributions must differ from the bare distance by exactly the
+    # standoff, and agree with each other -- not be exempt for one and not
+    # the other.
+    assert by_id["src1"].distance_m == pytest.approx(bare.metres + 0.3)
+    assert by_id["src2"].distance_m == pytest.approx(bare.metres + 0.3)
+    assert any("standoff" in note for note in by_id["src1"].notes)
+    assert any("standoff" in note for note in by_id["src2"].notes)
+
+    poi.offset_applied = True
+    result_applied = evaluate_point(project, poi)
+    by_id_applied = {c.source_id: c for c in result_applied.contributions}
+    assert by_id_applied["src1"].distance_m == pytest.approx(bare.metres)
+    assert not any("standoff" in note for note in by_id_applied["src1"].notes)
+
+
 def test_check_project_reports_problems():
     project = build_project()
     project.floor("fl0").calibration = None
@@ -215,6 +254,9 @@ def test_engine_reproduces_example_4_end_to_end():
             id="poi1", floor_id="fl2", x=0, y=0, label="Room above",
             occupancy=1.0, area_class="uncontrolled", auto_height=True,
             linked_source_ids=["src1"],
+            # This point marks Example 4's own stated distance, not a
+            # barrier surface, so the NCRP standoff should not stack on it.
+            offset_applied=True,
         )
     )
     project.materials = ["lead", "concrete"]
