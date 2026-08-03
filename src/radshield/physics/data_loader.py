@@ -51,5 +51,5 @@ def load_table(name: str) -> tuple[dict[str, Any], ...]:
     path = _data_dir / f"{name}.csv"
     if not path.exists():
         raise FileNotFoundError(f"data table {name!r} not found at {path}")
-    with path.open(newline="") as handle:
+    with path.open(newline="", encoding="utf-8") as handle:
         return tuple({k: _coerce(v) for k, v in row.items()} for row in csv.DictReader(handle))
