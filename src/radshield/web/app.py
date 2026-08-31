@@ -753,7 +753,7 @@ def results() -> dict[str, Any]:
 
 @app.get("/api/results.csv")
 def results_csv() -> Response:
-    """Export results as CSV, including the per-source audit rows."""
+    """Export results as CSV, one row per point of interest."""
     computed = evaluate_project(session.project)
     rows = results_to_rows(computed, session.project.materials)
     if not rows:

@@ -84,6 +84,7 @@ class MethodResult:
     thickness_mm: dict[str, float] = field(default_factory=dict)
     unavailable: dict[str, str] = field(default_factory=dict)
     unshielded_total: float = 0.0
+    goal_value: float = 0.0
 
 
 @dataclass
@@ -479,6 +480,7 @@ def _solve_tg108(
             thickness_mm=thickness_mm,
             unavailable=unavailable,
             unshielded_total=unshielded_total,
+            goal_value=goal.value,
         ),
         contributions,
         attenuation_nuclide,
@@ -587,6 +589,7 @@ def _solve_ncrp147(
             thickness_mm=thickness_mm,
             unavailable=unavailable,
             unshielded_total=unshielded_total,
+            goal_value=goal.value,
         ),
         contributions,
     )
@@ -750,6 +753,7 @@ def _solve_combined(
         thickness_mm=thickness_mm,
         unavailable=unavailable,
         unshielded_total=combined_unshielded_uSv,
+        goal_value=goal_uSv,
     )
 
 
@@ -1022,80 +1026,109 @@ def describe_barriers(project: Project) -> list[dict[str, Any]]:
     return report
 
 
-def results_to_rows(results: list[PointResult], materials: list[str]) -> list[dict[str, Any]]:
-    """Flatten results into CSV-ready rows, one per source contribution.
+def _barrier_summary(contribution: SourceContribution) -> str:
+    """One contribution's crossed barriers as ``label thickness material`` pairs."""
+    return ", ".join(
+        f"{b['label']} {b['effective_thickness_mm']:g} mm {b['material']}"
+        for b in contribution.barriers
+    )
 
-    A summary row per point carries the totals and required thickness; the
-    contribution rows above it show how the total was reached, so the export
-    is an audit trail rather than a bare answer.
+
+def _isotope_summary(contribution: SourceContribution) -> str:
+    """One contribution's isotope mix, or "" for a single-isotope source."""
+    if len(contribution.components) <= 1:
+        return ""
+    return " + ".join(f"{c['label']} {c['unshielded_uSv']:.3g}" for c in contribution.components)
+
+
+def results_to_rows(results: list[PointResult], materials: list[str]) -> list[dict[str, Any]]:
+    """One row per point of interest -- the shape a shielding report expects.
+
+    The point-level numbers (unshielded/shielded dose, % of goal, required
+    thickness) are always the *governing* figure: the combined TG-108 +
+    NCRP 147 total when a point sees both source types, otherwise whichever
+    single methodology is present -- the same figure
+    ``PointResult.governing_thickness_mm`` is built from, so this is never a
+    different answer than the app's own "what governs" logic.
+
+    Per-source detail (distance, barriers crossed, path transmission) is
+    exact when exactly one source feeds the point, which is the common case
+    a shielding report is built around. With more than one source linked to
+    the same point, those columns become a "label: value" list instead,
+    since each source can cross a different path and there is no single
+    number to report.
     """
     rows: list[dict[str, Any]] = []
     for res in results:
-        for contribution in res.contributions:
-            rows.append(
-                {
-                    "point": res.label,
-                    "floor": res.floor_name,
-                    "row_type": "source",
-                    "source": contribution.label,
-                    "method": contribution.method,
-                    "distance_m": round(contribution.distance_m, 3),
-                    "geometric_distance_m": (
-                        "" if contribution.geometric_distance_m is None
-                        else round(contribution.geometric_distance_m, 3)
-                    ),
-                    "quantity": contribution.quantity,
-                    "value": round(contribution.value, 4),
-                    "occupancy": res.occupancy,
-                    "area_class": res.area_class,
-                    "unshielded_value": round(contribution.unshielded_value, 4),
-                    "path_transmission": round(contribution.path_transmission, 5),
-                    "path_lead_equivalent_mm": round(contribution.path_equivalent_mm, 3),
-                    "isotopes": " + ".join(
-                        f"{c['label']} {c['unshielded_uSv']:.3g}" for c in contribution.components
-                    ) if len(contribution.components) > 1 else "",
-                    "barriers": " + ".join(
-                        f"{b['label']} {b['effective_thickness_mm']:g} mm {b['material']}"
-                        for b in contribution.barriers
-                    ),
-                }
+        row: dict[str, Any] = {
+            "point": res.label,
+            "floor": res.floor_name,
+            "source": " + ".join(c.label for c in res.contributions) or "(none)",
+            "occupancy_T": res.occupancy,
+            "area_class": res.area_class,
+        }
+
+        governing = next((m for m in res.methods if m.method == "combined"), None)
+        if governing is None and res.methods:
+            governing = res.methods[0]
+
+        if governing is not None:
+            p_over_t = governing.goal_value / res.occupancy if res.occupancy > 0 else None
+            row.update(
+                method=governing.method,
+                quantity=governing.quantity,
+                goal_P=round(governing.goal_value, 4),
+                goal_P_over_T=round(p_over_t, 4) if p_over_t is not None else "",
+                unshielded_dose_rate=round(governing.unshielded_total, 4),
+                shielded_dose_rate=round(governing.total, 4),
+                required_transmission_B=(
+                    "" if governing.required_transmission == float("inf")
+                    else round(governing.required_transmission, 5)
+                ),
+                pct_of_goal=(
+                    "" if governing.required_transmission == float("inf")
+                    else round(100.0 / governing.required_transmission, 2)
+                ),
             )
-        for method in res.methods:
-            row = {
-                "point": res.label,
-                "floor": res.floor_name,
-                "row_type": "total",
-                "source": "(all sources)",
-                "method": method.method,
-                "distance_m": "",
-                "quantity": method.quantity,
-                "value": round(method.total, 4),
-                "unshielded_value": round(method.unshielded_total, 4),
-                "occupancy": res.occupancy,
-                "area_class": res.area_class,
-                "required_transmission": (
-                    "" if method.required_transmission == float("inf")
-                    else round(method.required_transmission, 5)
-                ),
-                "pct_of_goal": (
-                    "" if method.required_transmission == float("inf")
-                    else round(100.0 / method.required_transmission, 2)
-                ),
-            }
             for material in materials:
-                row[f"{material}_mm"] = round(method.thickness_mm.get(material, 0.0), 3)
-            rows.append(row)
-        if res.warnings or res.errors:
-            rows.append(
-                {
-                    "point": res.label,
-                    "floor": res.floor_name,
-                    "row_type": "notes",
-                    "source": "",
-                    "method": "",
-                    "quantity": "",
-                    "value": "",
-                    "notes": " | ".join(res.errors + res.warnings),
-                }
+                row[f"{material}_mm_required"] = round(
+                    res.governing_thickness_mm.get(material, 0.0), 3
+                )
+
+        contributions = res.contributions
+        if len(contributions) == 1:
+            c = contributions[0]
+            row.update(
+                distance_m=round(c.distance_m, 3),
+                geometric_distance_m=(
+                    "" if c.geometric_distance_m is None else round(c.geometric_distance_m, 3)
+                ),
+                path_transmission=round(c.path_transmission, 5),
+                path_lead_equivalent_mm=round(c.path_equivalent_mm, 3),
+                barriers=_barrier_summary(c),
+                isotopes=_isotope_summary(c),
             )
+        elif contributions:
+            row.update(
+                distance_m=" | ".join(f"{c.label} {c.distance_m:.2f} m" for c in contributions),
+                geometric_distance_m="",
+                path_transmission=" | ".join(
+                    f"{c.label} x{c.path_transmission:.3g}" for c in contributions
+                ),
+                path_lead_equivalent_mm=" | ".join(
+                    f"{c.label} {c.path_equivalent_mm:.1f} mm" for c in contributions
+                ),
+                barriers=" | ".join(
+                    f"{c.label}: {_barrier_summary(c) or 'none'}" for c in contributions
+                ),
+                isotopes=" | ".join(
+                    summary for c in contributions if (summary := _isotope_summary(c))
+                ),
+            )
+
+        if res.warnings:
+            row["warnings"] = " | ".join(res.warnings)
+        if res.errors:
+            row["errors"] = " | ".join(res.errors)
+        rows.append(row)
     return rows
