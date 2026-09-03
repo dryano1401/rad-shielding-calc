@@ -383,6 +383,23 @@ def two_floor_setup(client):
     return project["pois"][0]["id"], source_id
 
 
+def test_elevation_endpoint_profiles_the_path(client):
+    poi_id, source_id = two_floor_setup(client)
+    response = client.get("/api/elevation", params={"source_id": source_id, "poi_id": poi_id})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["horizontal_total_m"] == pytest.approx(0.0)
+    assert payload["vertical_angle_deg"] == pytest.approx(90.0)
+    assert payload["source"]["height_m"] == pytest.approx(1.0)
+    assert payload["target"]["height_m"] == pytest.approx(4.3 + 0.5)  # TG-108 Fig. 5 auto height
+    assert [name for name, _ in payload["floors"]] == ["Source floor", "Floor above"]
+
+
+def test_elevation_endpoint_rejects_unknown_ids(client):
+    response = client.get("/api/elevation", params={"source_id": "nope", "poi_id": "nope"})
+    assert response.status_code == 404
+
+
 def test_distances_endpoint_exposes_components(client):
     poi_id, source_id = two_floor_setup(client)
     payload = client.get("/api/distances").json()

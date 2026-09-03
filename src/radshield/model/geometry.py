@@ -312,7 +312,15 @@ def distance(
 
 @dataclass
 class Crossing:
-    """A barrier a source-to-point path passes through."""
+    """A barrier a source-to-point path passes through.
+
+    ``distance_along_m``, ``hit_height_m``, ``base_z_m`` and ``top_z_m`` are
+    only set for a wall actually drawn on a floor (``wall_id`` not None) --
+    a manually declared barrier has no placement on the path, so it cannot be
+    drawn in a cross-section.  ``base_z_m``/``top_z_m`` are the wall's own
+    base and top expressed as height above the project datum, i.e. what the
+    elevation view draws as the wall's vertical extent.
+    """
 
     material: str
     thickness_mm: float
@@ -321,6 +329,10 @@ class Crossing:
     angle_deg: float = 0.0
     wall_id: str | None = None
     floor_name: str = ""
+    distance_along_m: float | None = None
+    hit_height_m: float | None = None
+    base_z_m: float | None = None
+    top_z_m: float | None = None
 
     @property
     def is_oblique(self) -> bool:
@@ -415,6 +427,10 @@ def wall_crossing(
         angle_deg=angle,
         wall_id=wall.id,
         floor_name=floor.name,
+        distance_along_m=t * math.hypot(dx, dy),
+        hit_height_m=hit_z,
+        base_z_m=base_z,
+        top_z_m=top_z,
     )
 
 
@@ -471,6 +487,99 @@ def path_barriers(
         )
 
     return crossings, warnings
+
+
+@dataclass
+class ElevationEndpoint:
+    """One end of an elevation cross-section: where it sits in the side view."""
+
+    label: str
+    floor_name: str
+    horizontal_m: float
+    height_m: float
+
+
+@dataclass
+class ElevationProfile:
+    """A vertical slice through the project along one source-to-point path.
+
+    The cutting plane is vertical and contains the straight line from source
+    to point: ``horizontal_m`` on either endpoint, and on every crossing, is
+    the signed distance along that line's horizontal bearing, measured from
+    the source.  Walls are reported only where they are actually crossed
+    (``wall_id`` set); a manually declared barrier has no drawing position and
+    is left out.
+    """
+
+    source: ElevationEndpoint
+    target: ElevationEndpoint
+    horizontal_total_m: float
+    vertical_angle_deg: float
+    bearing: tuple[float, float]
+    floors: list[tuple[str, float]]
+    crossings: list[Crossing]
+    warnings: list[str] = field(default_factory=list)
+
+
+def elevation_profile(
+    project: Project,
+    source: SourcePoint,
+    poi: PointOfInterest,
+    *,
+    apply_obliquity: bool = False,
+) -> ElevationProfile:
+    """Build a side-view cross-section along one source-to-point path.
+
+    Reuses :func:`path_barriers` for which walls are in the way, then keeps
+    only the ones actually drawn on a floor (a manually declared barrier has
+    no geometric position to plot) and works out where along the path, and at
+    what height, each one is met.
+    """
+    source_floor = project.floor(source.floor_id)
+    poi_floor = project.floor(poi.floor_id)
+
+    warnings: list[str] = []
+    sx, sy, w1 = floor_offset_m(source_floor, source.x, source.y)
+    px, py, w2 = floor_offset_m(poi_floor, poi.x, poi.y)
+    warnings.extend(w1)
+    warnings.extend(w2)
+
+    poi_height, _ = target_height(source_floor, poi_floor, poi)
+    source_z = source_floor.elevation_m + source.height_above_floor_m
+    poi_z = poi_floor.elevation_m + poi_height
+
+    dx, dy = px - sx, py - sy
+    horizontal_total = math.hypot(dx, dy)
+    if horizontal_total < 1e-9 and abs(poi_z - source_z) < 1e-9:
+        raise GeometryError(
+            f"source {source.label or source.id!r} and point {poi.label or poi.id!r} are "
+            "coincident; move one of them"
+        )
+    bearing = (dx / horizontal_total, dy / horizontal_total) if horizontal_total > 1e-9 else (1.0, 0.0)
+    vertical_angle = math.degrees(math.atan2(poi_z - source_z, horizontal_total))
+
+    crossings, wall_warnings = path_barriers(project, source, poi, apply_obliquity=apply_obliquity)
+    warnings.extend(wall_warnings)
+    drawable = [c for c in crossings if c.wall_id is not None]
+
+    floors = sorted(((f.name, f.elevation_m) for f in project.floors), key=lambda item: item[1])
+
+    return ElevationProfile(
+        source=ElevationEndpoint(
+            label=source.label or source.id, floor_name=source_floor.name,
+            horizontal_m=0.0, height_m=source_z,
+        ),
+        target=ElevationEndpoint(
+            label=poi.label or poi.id, floor_name=poi_floor.name,
+            horizontal_m=horizontal_total, height_m=poi_z,
+        ),
+        horizontal_total_m=horizontal_total,
+        vertical_angle_deg=vertical_angle,
+        bearing=bearing,
+        floors=floors,
+        crossings=drawable,
+        warnings=warnings,
+    )
 
 
 @dataclass

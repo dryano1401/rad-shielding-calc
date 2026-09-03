@@ -26,8 +26,10 @@ from ..engine.evaluate import (
     results_to_rows,
 )
 from ..model.geometry import (
+    GeometryError,
     alignment_span_m,
     check_project,
+    elevation_profile,
     format_length,
     measurement_length,
 )
@@ -776,6 +778,28 @@ def results_csv() -> Response:
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="shielding_results.csv"'},
     )
+
+
+@app.get("/api/elevation")
+def elevation_view(source_id: str, poi_id: str) -> dict[str, Any]:
+    """Vertical cross-section along one source-to-point path.
+
+    Floors stacked by elevation, the walls that path crosses drawn to scale
+    by height, the ray itself and its vertical angle -- the side-view
+    counterpart to the plan canvas.
+    """
+    try:
+        source = session.project.source(source_id)
+        poi = session.project.poi(poi_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    try:
+        profile = elevation_profile(
+            session.project, source, poi, apply_obliquity=session.project.apply_obliquity,
+        )
+    except GeometryError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return asdict(profile)
 
 
 @app.get("/api/report.docx")

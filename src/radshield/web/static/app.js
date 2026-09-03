@@ -27,6 +27,8 @@ const state = {
   nuclides: null,           // /api/nuclides payload: every registered isotope
   nuclideDefault511: null,  // Archer fit new isotopes prefill from, per material
   wallOpacity: 0.75,        // view-only: how solid drawn walls render, e.g. for a screenshot
+  elevation: null,          // /api/elevation payload for the dialog's current source/point pair
+  elevationShowGrid: false, // debug overlay of the source's elevation chart grid, in the cross-section
 };
 
 const canvas = document.getElementById('plan');
@@ -1165,6 +1167,8 @@ function renderPointList() {
   if (!state.project.sources.length && !state.project.pois.length) {
     box.innerHTML = '<p class="hint">Nothing placed yet.</p>';
   }
+  document.getElementById('btn-elevation').disabled =
+    !(state.project.sources.length && state.project.pois.length);
 }
 
 function pointRow(kind, id, name, where) {
@@ -2063,6 +2067,245 @@ document.getElementById('map-import').onclick = async event => {
     mapDialog.close();
   } catch (error) { alert(error.message); }
 };
+
+/* ------------------------------------------------------------- elevation */
+
+const elevationCanvas = document.getElementById('elevation-canvas');
+const elevationCtx = elevationCanvas.getContext('2d');
+const elevationDialog = document.getElementById('elevation-dialog');
+
+function elevationOptionLabel(kind, id) {
+  const item = kind === 'source'
+    ? state.project.sources.find(s => s.id === id)
+    : state.project.pois.find(p => p.id === id);
+  if (!item) return '?';
+  const floor = state.project.floors.find(f => f.id === item.floor_id);
+  return `${item.label || (kind === 'source' ? 'source' : 'point')} (${floor?.name || '?'})`;
+}
+
+function populateElevationSelects() {
+  const sourceSelect = document.getElementById('elev-source');
+  const poiSelect = document.getElementById('elev-poi');
+  const keepSource = sourceSelect.value;
+  const keepPoi = poiSelect.value;
+  sourceSelect.innerHTML = state.project.sources
+    .map(s => `<option value="${s.id}">${escapeHtml(elevationOptionLabel('source', s.id))}</option>`)
+    .join('');
+  poiSelect.innerHTML = state.project.pois
+    .map(p => `<option value="${p.id}">${escapeHtml(elevationOptionLabel('poi', p.id))}</option>`)
+    .join('');
+  if ([...sourceSelect.options].some(o => o.value === keepSource)) sourceSelect.value = keepSource;
+  if ([...poiSelect.options].some(o => o.value === keepPoi)) poiSelect.value = keepPoi;
+  // Prefer a linked pair, so the first view shown is a real path rather than
+  // whichever two points happened to sort first.
+  if (!keepPoi && poiSelect.options.length) {
+    const linked = state.project.pois.find(p => p.linked_source_ids.includes(sourceSelect.value));
+    if (linked) poiSelect.value = linked.id;
+  }
+}
+
+async function refreshElevation() {
+  const sourceId = document.getElementById('elev-source').value;
+  const poiId = document.getElementById('elev-poi').value;
+  const status = document.getElementById('elevation-status');
+  const gridToggle = document.getElementById('elev-grid-toggle');
+  if (!sourceId || !poiId) {
+    state.elevation = null;
+    status.textContent = 'Place a source and a point of interest first.';
+    gridToggle.hidden = true;
+    drawElevation();
+    return;
+  }
+  try {
+    state.elevation = await api(`/api/elevation?source_id=${sourceId}&poi_id=${poiId}`);
+    status.textContent = state.elevation.warnings.join(' · ');
+    const source = state.project.sources.find(s => s.id === sourceId);
+    const hasElevationChart = !!(source?.params?.elevation_map_id
+      && (state.project.scatter_maps || []).some(m => m.id === source.params.elevation_map_id));
+    gridToggle.hidden = !hasElevationChart;
+    if (!hasElevationChart) {
+      state.elevationShowGrid = false;
+      document.getElementById('elev-show-grid').checked = false;
+    }
+  } catch (error) {
+    state.elevation = null;
+    status.textContent = error.message;
+  }
+  drawElevation();
+}
+
+function findWallById(wallId) {
+  if (!wallId) return null;
+  for (const floor of state.project.floors) {
+    const wall = (floor.walls || []).find(w => w.id === wallId);
+    if (wall) return wall;
+  }
+  return null;
+}
+
+function drawElevationDot(point, color) {
+  elevationCtx.save();
+  elevationCtx.fillStyle = color || '#e6e9ef';
+  elevationCtx.beginPath();
+  elevationCtx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+  elevationCtx.fill();
+  elevationCtx.restore();
+}
+
+// Overlays a source's elevation-plane scatter chart onto the cross-section,
+// the same way the plan canvas overlays a plan chart's grid values -- each
+// cell placed at its true position, projected onto the vertical plane the
+// chosen source-to-point path defines. The projection mirrors
+// chartCellPdfPos()'s east/north rotation, with the chart's own x axis (the
+// equipment's table axis) taking the place of that function's "local y" --
+// an elevation chart has no depth dimension of its own.
+function drawElevationChartGrid(sx, sy) {
+  const profile = state.elevation;
+  const source = state.project.sources.find(s => s.id === document.getElementById('elev-source').value);
+  const mapId = source?.params?.elevation_map_id;
+  const chart = (state.project.scatter_maps || []).find(m => m.id === mapId);
+  if (!profile || !source || !chart) return;
+
+  const [ux, uy] = profile.bearing;
+  const theta = (source.rotation_deg || 0) * Math.PI / 180;
+  const unitScale = CHART_COORDINATE_UNITS_M[chart.coordinate_unit] ?? 1;
+
+  elevationCtx.save();
+  elevationCtx.font = '10px ui-monospace, monospace';
+  elevationCtx.textAlign = 'center';
+  elevationCtx.textBaseline = 'bottom';
+  for (let row = 0; row < chart.y_coords.length; row++) {
+    for (let col = 0; col < chart.x_coords.length; col++) {
+      const value = chart.values[row]?.[col];
+      const tableAxis = chart.x_coords[col] * unitScale * (chart.flip_x ? -1 : 1);
+      const height = chart.y_coords[row] * unitScale * (chart.flip_y ? -1 : 1);
+      const east = -tableAxis * Math.sin(theta);
+      const north = tableAxis * Math.cos(theta);
+      const p = { x: sx(east * ux + north * uy), y: sy(profile.source.height_m + height) };
+      const text = value == null ? 'NA' : String(value);
+      const width = elevationCtx.measureText(text).width;
+      elevationCtx.fillStyle = 'rgba(10,12,16,.82)';
+      elevationCtx.fillRect(p.x - width / 2 - 2, p.y - 15, width + 4, 13);
+      elevationCtx.fillStyle = value == null ? '#ff6a6a' : '#ffd600';
+      elevationCtx.beginPath();
+      elevationCtx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+      elevationCtx.fill();
+      elevationCtx.fillText(text, p.x, p.y - 3);
+    }
+  }
+  elevationCtx.restore();
+}
+
+function drawElevation() {
+  const rect = elevationCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  if (elevationCanvas.width !== rect.width * dpr || elevationCanvas.height !== rect.height * dpr) {
+    elevationCanvas.width = rect.width * dpr;
+    elevationCanvas.height = rect.height * dpr;
+  }
+  elevationCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  elevationCtx.clearRect(0, 0, rect.width, rect.height);
+
+  const profile = state.elevation;
+  if (!profile || !rect.width || !rect.height) return;
+
+  const pad = 56;
+  const heights = [
+    ...profile.floors.map(([, elevationM]) => elevationM),
+    profile.source.height_m, profile.target.height_m,
+    ...profile.crossings.map(c => c.top_z_m),
+  ];
+  const minH = Math.min(...heights) - 0.5;
+  const maxH = Math.max(...heights) + 0.5;
+  const minX = Math.min(0, profile.horizontal_total_m) - 0.5;
+  const maxX = Math.max(0, profile.horizontal_total_m) + 0.5;
+  const scale = Math.min(
+    (rect.width - 2 * pad) / Math.max(maxX - minX, 0.1),
+    (rect.height - 2 * pad) / Math.max(maxH - minH, 0.1),
+  );
+  const sx = x => pad + (x - minX) * scale;
+  const sy = h => rect.height - pad - (h - minH) * scale;
+
+  // Floor levels, as reference lines the walls and ray are drawn against.
+  elevationCtx.save();
+  elevationCtx.strokeStyle = '#3a4152';
+  elevationCtx.fillStyle = '#96a0b1';
+  elevationCtx.font = '11px ui-monospace, monospace';
+  elevationCtx.setLineDash([4, 4]);
+  for (const [name, elevationM] of profile.floors) {
+    const y = sy(elevationM);
+    elevationCtx.beginPath();
+    elevationCtx.moveTo(pad, y);
+    elevationCtx.lineTo(rect.width - pad, y);
+    elevationCtx.stroke();
+    elevationCtx.fillText(`${name} (${formatLength(elevationM)})`, 4, y - 3);
+  }
+  elevationCtx.setLineDash([]);
+  elevationCtx.restore();
+
+  // Walls the path crosses, drawn to scale by height at the point they're met.
+  for (const crossing of profile.crossings) {
+    const wall = findWallById(crossing.wall_id);
+    const x = sx(crossing.distance_along_m);
+    elevationCtx.save();
+    elevationCtx.strokeStyle = (wall && wall.color) || materialColour(crossing.material);
+    elevationCtx.globalAlpha = state.wallOpacity;
+    elevationCtx.lineWidth = Math.max((crossing.thickness_mm / 1000) * scale, 3);
+    elevationCtx.lineCap = 'round';
+    elevationCtx.beginPath();
+    elevationCtx.moveTo(x, sy(crossing.base_z_m));
+    elevationCtx.lineTo(x, sy(crossing.top_z_m));
+    elevationCtx.stroke();
+    elevationCtx.restore();
+    elevationCtx.fillStyle = '#c7cedb';
+    elevationCtx.font = '10px ui-monospace, monospace';
+    elevationCtx.textAlign = 'center';
+    elevationCtx.fillText(crossing.label, x, sy(crossing.top_z_m) - 4);
+  }
+
+  if (state.elevationShowGrid) drawElevationChartGrid(sx, sy);
+
+  // The ray itself, and its vertical angle.
+  const p1 = { x: sx(profile.source.horizontal_m), y: sy(profile.source.height_m) };
+  const p2 = { x: sx(profile.target.horizontal_m), y: sy(profile.target.height_m) };
+  elevationCtx.save();
+  elevationCtx.strokeStyle = '#ffd600';
+  elevationCtx.lineWidth = 2;
+  elevationCtx.beginPath();
+  elevationCtx.moveTo(p1.x, p1.y);
+  elevationCtx.lineTo(p2.x, p2.y);
+  elevationCtx.stroke();
+  elevationCtx.restore();
+
+  const style = getComputedStyle(document.documentElement);
+  drawElevationDot(p1, style.getPropertyValue('--source').trim());
+  drawElevationDot(p2, style.getPropertyValue('--poi').trim());
+  elevationCtx.textAlign = 'left';
+  elevationCtx.fillStyle = '#e6e9ef';
+  elevationCtx.font = '11px system-ui';
+  elevationCtx.fillText(profile.source.label, p1.x + 6, p1.y - 6);
+  elevationCtx.fillText(profile.target.label, p2.x + 6, p2.y - 6);
+
+  const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  const angleText =
+    `${profile.vertical_angle_deg >= 0 ? '+' : ''}${profile.vertical_angle_deg.toFixed(1)}° from horizontal`;
+  elevationCtx.fillStyle = '#ffd600';
+  elevationCtx.font = 'bold 11px system-ui';
+  elevationCtx.fillText(angleText, mid.x + 6, mid.y - 10);
+}
+
+document.getElementById('btn-elevation').onclick = () => {
+  populateElevationSelects();
+  elevationDialog.showModal();
+  refreshElevation();
+};
+document.getElementById('elev-source').onchange = refreshElevation;
+document.getElementById('elev-poi').onchange = refreshElevation;
+document.getElementById('elev-show-grid').onchange = event => {
+  state.elevationShowGrid = event.target.checked;
+  drawElevation();
+};
+window.addEventListener('resize', () => { if (elevationDialog.open) drawElevation(); });
 
 document.getElementById('btn-add-floor').onclick = () => document.getElementById('pdf-file').click();
 document.getElementById('pdf-file').onchange = async event => {

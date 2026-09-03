@@ -136,6 +136,7 @@
     <section>
       <h2>Placed points</h2>
       <div id="point-list"></div>
+      <button id="btn-elevation" class="wide" disabled>View elevation…</button>
     </section>
   </aside>
 </main>
@@ -264,6 +265,31 @@
       </div>
     </div>
 
+    <div class="dialog-actions">
+      <button value="close">Close</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="elevation-dialog">
+  <form method="dialog">
+    <h2>Elevation view</h2>
+    <p class="hint">A side view along a straight line from one source to one point: the
+      floors it passes through, the walls it crosses drawn to scale by height, the ray
+      itself, and its vertical angle.</p>
+    <div class="row">
+      <label>Source
+        <select id="elev-source"></select>
+      </label>
+      <label>Point
+        <select id="elev-poi"></select>
+      </label>
+      <label class="ghost-toggle" id="elev-grid-toggle" hidden>
+        <input id="elev-show-grid" type="checkbox"> Show elevation chart grid
+      </label>
+    </div>
+    <div id="elevation-canvas-wrap"><canvas id="elevation-canvas"></canvas></div>
+    <div id="elevation-status" class="hint"></div>
     <div class="dialog-actions">
       <button value="close">Close</button>
     </div>
