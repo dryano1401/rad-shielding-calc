@@ -32,12 +32,45 @@ def test_primary_archer_by_kvp_spot_values():
     assert (concrete.alpha, concrete.beta, concrete.gamma) == (0.03243, 0.08599, 1.467)
 
 
-def test_known_extraction_gap_raises_informatively():
-    """40 and 45 kVp were captured for concrete only; lead must fail loudly."""
+def test_extraction_gap_is_bridged_by_interpolation():
+    """40 kVp was captured for concrete but not lead -- lead has 35 and 50,
+    so interpolation now bridges the gap instead of failing."""
     assert tables.primary_archer_by_kvp(40, "concrete") is not None
-    with pytest.raises(tables.TableLookupError) as exc:
-        tables.primary_archer_by_kvp(40, "lead")
-    assert "available" in str(exc.value)
+    lead_40 = tables.primary_archer_by_kvp(40, "lead")
+    lead_35 = tables.primary_archer_by_kvp(35, "lead")
+    lead_50 = tables.primary_archer_by_kvp(50, "lead")
+    # 40 is 1/3 of the way from 35 to 50.
+    assert lead_40.alpha == pytest.approx(
+        lead_35.alpha + (lead_50.alpha - lead_35.alpha) / 3, rel=1e-6
+    )
+    assert "interpolated between 35 and 50" in lead_40.source
+
+
+def test_kvp_outside_the_tabulated_range_still_raises():
+    """There is nothing below 25 kVp or above 150 kVp to interpolate from."""
+    with pytest.raises(tables.TableLookupError, match="outside the tabulated range"):
+        tables.primary_archer_by_kvp(10, "lead")
+    with pytest.raises(tables.TableLookupError, match="outside the tabulated range"):
+        tables.primary_archer_by_kvp(200, "lead")
+
+
+def test_exact_kvp_match_is_not_flagged_as_interpolated():
+    lead_50 = tables.primary_archer_by_kvp(50, "lead")
+    assert "interpolated" not in lead_50.source
+    assert "50 kVp" in lead_50.source
+
+
+def test_ct_secondary_kvp_interpolates_between_tabulated_values():
+    """CT tube kVp (e.g. 120, 140) was previously an exact-match gap for
+    Table C.1's secondary fits; now it interpolates between the tabulated
+    values either side, the same as the primary table already did."""
+    lead_120 = tables.secondary_archer("120", "lead", by_kvp=True)
+    assert lead_120.alpha == pytest.approx(2.246)
+    lead_110 = tables.secondary_archer("110", "lead", by_kvp=True)
+    lead_100 = tables.secondary_archer("100", "lead", by_kvp=True)
+    # 110 is exactly halfway between the tabulated 100 and 120.
+    assert lead_110.alpha == pytest.approx((lead_100.alpha + lead_120.alpha) / 2)
+    assert "interpolated between 100 and 120" in lead_110.source
 
 
 def test_secondary_workload_gap_for_steel_raises():

@@ -205,11 +205,13 @@ def test_full_workflow_produces_results_and_csv(client):
     response = client.get("/api/results.csv")
     assert response.status_code == 200
     rows = list(csv.DictReader(io.StringIO(response.text)))
-    assert {"source", "total"} <= {row["row_type"] for row in rows}
-    total_row = next(row for row in rows if row["row_type"] == "total")
-    assert float(total_row["lead_mm"]) > 0
+    assert len(rows) == 1  # one row per point
+    row = rows[0]
+    assert float(row["lead_mm_required"]) > 0
+    assert float(row["shielded_dose_rate"]) == pytest.approx(117.0, rel=0.01)
+    assert float(row["unshielded_dose_rate"]) == pytest.approx(117.0, rel=0.01)
     # 117 uSv/week against the 20 uSv/week uncontrolled goal, bare -- 100/B.
-    assert float(total_row["pct_of_goal"]) == pytest.approx(100.0 / 0.17, rel=0.02)
+    assert float(row["pct_of_goal"]) == pytest.approx(100.0 / 0.17, rel=0.02)
 
 
 def test_dragging_a_point_persists_new_coordinates(client):
@@ -444,9 +446,9 @@ def test_csv_export_records_the_geometric_distance_alongside_the_override(client
     poi_id, source_id = two_floor_setup(client)
     client.patch(f"/api/pois/{poi_id}", json={"distance_overrides": {source_id: 6.0}})
     rows = list(csv.DictReader(io.StringIO(client.get("/api/results.csv").text)))
-    source_row = next(row for row in rows if row["row_type"] == "source")
-    assert float(source_row["distance_m"]) == 6.0
-    assert float(source_row["geometric_distance_m"]) == pytest.approx(3.8)
+    row = rows[0]
+    assert float(row["distance_m"]) == 6.0
+    assert float(row["geometric_distance_m"]) == pytest.approx(3.8)
 
 
 def wall_scenario(client):
@@ -613,11 +615,11 @@ def test_csv_records_barriers_and_path_transmission(client):
         "p1": [0, -50], "p2": [0, 50], "material": "concrete", "thickness_mm": 200,
         "top_height_m": 3.0, "label": "Corridor wall"})
     rows = list(csv.DictReader(io.StringIO(client.get("/api/results.csv").text)))
-    source_row = next(row for row in rows if row["row_type"] == "source")
-    assert "Corridor wall" in source_row["barriers"]
-    assert float(source_row["path_transmission"]) < 1.0
-    assert float(source_row["path_lead_equivalent_mm"]) > 0
-    assert float(source_row["unshielded_value"]) > float(source_row["value"])
+    row = rows[0]
+    assert "Corridor wall" in row["barriers"]
+    assert float(row["path_transmission"]) < 1.0
+    assert float(row["path_lead_equivalent_mm"]) > 0
+    assert float(row["unshielded_dose_rate"]) > float(row["shielded_dose_rate"])
 
 
 def test_deleting_a_source_clears_its_named_barriers(client):
@@ -882,9 +884,9 @@ def test_bad_isotope_entries_are_rejected(client):
 def test_isotope_mix_appears_in_the_csv(client):
     mix_scenario(client, [FDG, DOTATATE])
     rows = list(csv.DictReader(io.StringIO(client.get("/api/results.csv").text)))
-    source_row = next(row for row in rows if row["row_type"] == "source")
-    assert "F-18 FDG" in source_row["isotopes"]
-    assert "Ga-68 DOTATATE" in source_row["isotopes"]
+    row = rows[0]
+    assert "F-18 FDG" in row["isotopes"]
+    assert "Ga-68 DOTATATE" in row["isotopes"]
 
 
 def test_scale_can_be_typed_instead_of_drawn(client):

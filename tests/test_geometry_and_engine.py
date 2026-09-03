@@ -388,18 +388,23 @@ def test_mixed_methodologies_mark_single_methodology_materials_unavailable():
     assert "lead" in result.governing_thickness_mm
 
 
-def test_csv_rows_include_sources_totals_and_notes():
+def test_csv_rows_are_one_per_point_with_the_governing_totals():
     project = build_project()
     project.sources.append(uptake_source())
     project.pois.append(
         PointOfInterest(id="poi1", floor_id="fl2", x=0, y=0, label="Office",
-                        auto_height=True, linked_source_ids=["src1"])
+                        auto_height=True, linked_source_ids=["src1"], offset_applied=True)
     )
     rows = results_to_rows(evaluate_project(project), project.materials)
-    kinds = {row["row_type"] for row in rows}
-    assert "source" in kinds and "total" in kinds
-    total_row = next(r for r in rows if r["row_type"] == "total")
-    assert "lead_mm" in total_row
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["point"] == "Office"
+    assert row["source"] == "Uptake room"
+    assert "lead_mm_required" in row
+    assert row["unshielded_dose_rate"] == pytest.approx(117.0, rel=0.01)
+    assert row["shielded_dose_rate"] == pytest.approx(117.0, rel=0.01)
+    assert row["goal_P"] == pytest.approx(20.0, rel=0.01)
+    assert row["pct_of_goal"] == pytest.approx(100.0 / 0.17, rel=0.02)
 
 
 def test_project_round_trips_through_archive(tmp_path):
