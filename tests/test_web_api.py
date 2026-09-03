@@ -213,6 +213,20 @@ def test_full_workflow_produces_results_and_csv(client):
     # 117 uSv/week against the 20 uSv/week uncontrolled goal, bare -- 100/B.
     assert float(row["pct_of_goal"]) == pytest.approx(100.0 / 0.17, rel=0.02)
 
+    report_response = client.get("/api/report.docx")
+    assert report_response.status_code == 200
+    assert report_response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    docx = pytest.importorskip("docx")
+    document = docx.Document(io.BytesIO(report_response.content))
+    text = "\n".join(p.text for p in document.paragraphs)
+    for table in document.tables:
+        for row_cells in table.rows:
+            text += "\n" + "\n".join(c.text for c in row_cells.cells)
+    assert "Office above" in text
+    assert "117" in text
+
 
 def test_dragging_a_point_persists_new_coordinates(client):
     project = add_floor(client, "Level 1", 0.0)

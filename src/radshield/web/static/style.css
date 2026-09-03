@@ -65,7 +65,7 @@ button, select, input[type=text], input[type=number] {
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.wide { width: 100%; margin-top: 6px; }
-a#btn-csv {
+a#btn-csv, a#btn-report {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 5px; padding: 5px 9px; text-decoration: none;
 }

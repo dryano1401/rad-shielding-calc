@@ -50,7 +50,7 @@ from ..physics import nuclides
 from ..physics import isodose
 from ..physics.archer import ArcherError, ArcherParams
 from ..physics.ncrp147 import tables as ncrp_tables
-from . import render
+from . import render, report
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -775,6 +775,18 @@ def results_csv() -> Response:
         buffer.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="shielding_results.csv"'},
+    )
+
+
+@app.get("/api/report.docx")
+def report_docx() -> Response:
+    """Generate a Word report: auto-filled data tables, placeholder narrative."""
+    computed = evaluate_project(session.project)
+    content = report.build_report(session.project, computed)
+    return Response(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="shielding_report.docx"'},
     )
 
 
