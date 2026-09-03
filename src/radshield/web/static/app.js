@@ -27,6 +27,7 @@ const state = {
   nuclides: null,           // /api/nuclides payload: every registered isotope
   nuclideDefault511: null,  // Archer fit new isotopes prefill from, per material
   wallOpacity: 0.75,        // view-only: how solid drawn walls render, e.g. for a screenshot
+  shieldingView: false,     // view-only: colour every wall by its thickness, for a report figure
   elevation: null,          // /api/elevation payload for the dialog's current source/point pair
   elevationShowGrid: false, // debug overlay of the source's elevation chart grid, in the cross-section
 };
@@ -71,6 +72,56 @@ const MATERIAL_COLOUR = {
   gypsum: '#e6d2a8', glass: '#7fd4e8', wood: '#c9a06b',
 };
 const materialColour = m => MATERIAL_COLOUR[m] || '#96a0b1';
+
+// Saturated, well-separated hues for the shielding view. Each is drawn over a
+// dark casing, so they stay legible against white paper, black linework and
+// hatched fills alike -- the drawing underneath is not ours to control.
+const SHIELDING_COLOUR = [
+  '#ff2020', '#1f6bff', '#00c853', '#ff00d4',
+  '#ff9100', '#00e5ff', '#ffea00', '#b388ff',
+];
+
+// What a wall is drawn as in the shielding view, regardless of its real
+// thickness -- a lead sheet is far too thin to see at any useful zoom, and
+// here the colour carries the thickness instead of the line width.
+const SHIELDING_VIEW_WIDTH_M = 0.060;
+
+const thicknessKey = mm => mm.toFixed(3);
+
+// Every distinct wall thickness in the project, thickest first, each given its
+// own colour. Built across all floors rather than per floor so one thickness
+// reads the same on every drawing in a report.
+function shieldingColours() {
+  const distinct = new Map();
+  for (const floor of state.project?.floors || []) {
+    for (const wall of floor.walls || []) distinct.set(thicknessKey(wall.thickness_mm), wall.thickness_mm);
+  }
+  const entries = new Map();
+  [...distinct.values()].sort((a, b) => b - a).forEach((mm, index) => {
+    entries.set(thicknessKey(mm), { colour: SHIELDING_COLOUR[index % SHIELDING_COLOUR.length], mm });
+  });
+  return entries;
+}
+
+const INCH_MM = 25.4;
+
+// Lead is specified in fractions of an inch on US drawings, so a thickness
+// landing on a standard fraction is labelled with it alongside the millimetres
+// it is actually stored in. Anything off the fraction grid is left in mm only
+// rather than being rounded into a figure the drawing does not mean.
+function inchFraction(mm) {
+  const steps = Math.round(mm / (INCH_MM / 32));
+  if (steps < 1 || Math.abs(mm - steps * (INCH_MM / 32)) > 0.05) return '';
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const divisor = gcd(steps, 32);
+  const top = steps / divisor, bottom = 32 / divisor;
+  return bottom === 1 ? `${top}"` : `${top}/${bottom}"`;
+}
+
+function thicknessLabel(mm) {
+  const fraction = inchFraction(mm);
+  return `${Number(mm.toFixed(2))} mm${fraction ? ` ≈ ${fraction}` : ''}`;
+}
 
 const displayUnit = () => state.project?.display_unit || 'ft';
 const toMetres = (value, unit) => value * METRES_PER[unit || displayUnit()];
@@ -360,9 +411,52 @@ function draw() {
   drawPoints(floor, 1);
   drawCalibration(floor);
   drawChartGridDebug(floor);
+  drawShieldingLegend();
+}
+
+// Colour only means something with a key beside it, so the shielding view
+// carries its own legend into whatever screenshot is taken of it.
+function drawShieldingLegend() {
+  if (!state.shieldingView) return;
+  const entries = [...shieldingColours().values()];
+  if (!entries.length) return;
+
+  ctx.save();
+  ctx.font = '12px system-ui';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const labels = entries.map(entry => thicknessLabel(entry.mm));
+  const width = Math.max(...labels.map(label => ctx.measureText(label).width)) + 62;
+  const height = entries.length * 21 + 30;
+  ctx.fillStyle = 'rgba(10,12,16,.9)';
+  ctx.strokeStyle = '#3a4152';
+  ctx.lineWidth = 1;
+  ctx.fillRect(12, 12, width, height);
+  ctx.strokeRect(12, 12, width, height);
+
+  ctx.fillStyle = '#e6e9ef';
+  ctx.fillText('Shielding required', 24, 30);
+  ctx.lineCap = 'round';
+  entries.forEach((entry, index) => {
+    const y = 48 + index * 21;
+    for (const [colour, lineWidth] of [['#101319', 11], [entry.colour, 7]]) {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      ctx.moveTo(24, y);
+      ctx.lineTo(52, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#e6e9ef';
+    ctx.fillText(labels[index], 62, y);
+  });
+  ctx.restore();
 }
 
 function drawWalls(floor) {
+  // The shielding view ignores material and per-wall colours on purpose: the
+  // whole point of it is that colour means thickness and nothing else.
+  const shielding = state.shieldingView ? shieldingColours() : null;
   ctx.save();
   ctx.lineCap = 'round';
   for (const wall of floor.walls || []) {
@@ -372,13 +466,35 @@ function drawWalls(floor) {
     const scaled = floor.metres_per_unit
       ? (wall.thickness_mm / 1000) / floor.metres_per_unit * RENDER_ZOOM * state.view.scale
       : 5;
+    const segment = () => {
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    };
+    if (shielding) {
+      // A sheet of lead drawn to its true 1.58 mm is invisible, so in this
+      // view every wall is drawn at the same 60 mm equivalent width. It still
+      // scales with the drawing, so the line stays proportionate on zoom.
+      const width = Math.max(
+        floor.metres_per_unit
+          ? SHIELDING_VIEW_WIDTH_M / floor.metres_per_unit * RENDER_ZOOM * state.view.scale
+          : 6,
+        4,
+      );
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#101319';
+      ctx.lineWidth = width + 4;
+      segment();
+      ctx.strokeStyle = shielding.get(thicknessKey(wall.thickness_mm)).colour;
+      ctx.lineWidth = width;
+      segment();
+      continue;
+    }
     ctx.strokeStyle = wall.color || materialColour(wall.material);
     ctx.lineWidth = Math.max(scaled, 3);
     ctx.globalAlpha = state.wallOpacity;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
+    segment();
   }
 
   if (state.tool === 'wall' && state.wallPick.length === 1 && state.hover) {
@@ -1767,6 +1883,12 @@ document.getElementById('wall-opacity').oninput = event => {
   state.wallOpacity = parseFloat(event.target.value);
   draw();
 };
+document.getElementById('shielding-view').onchange = event => {
+  state.shieldingView = event.target.checked;
+  document.getElementById('wall-opacity').disabled = state.shieldingView;
+  draw();
+  if (elevationDialog.open) drawElevation();
+};
 document.getElementById('btn-calculate').onclick = () => calculate().catch(e => alert(e.message));
 document.getElementById('btn-collapse-results').onclick = () => {
   state.resultsCollapsed = !state.resultsCollapsed;
@@ -2259,18 +2381,36 @@ function drawElevation() {
   elevationCtx.restore();
 
   // Walls the path crosses, drawn to scale by height at the point they're met.
+  // The shielding view colours them by thickness here too, so the plan and the
+  // cross-section of the same walls read the same way.
+  const shielding = state.shieldingView ? shieldingColours() : null;
   for (const crossing of profile.crossings) {
     const wall = findWallById(crossing.wall_id);
     const x = sx(crossing.distance_along_m);
     elevationCtx.save();
-    elevationCtx.strokeStyle = (wall && wall.color) || materialColour(crossing.material);
-    elevationCtx.globalAlpha = state.wallOpacity;
-    elevationCtx.lineWidth = Math.max((crossing.thickness_mm / 1000) * scale, 3);
     elevationCtx.lineCap = 'round';
-    elevationCtx.beginPath();
-    elevationCtx.moveTo(x, sy(crossing.base_z_m));
-    elevationCtx.lineTo(x, sy(crossing.top_z_m));
-    elevationCtx.stroke();
+    if (shielding) {
+      const width = Math.max(SHIELDING_VIEW_WIDTH_M * scale, 4);
+      for (const [colour, lineWidth] of [
+        ['#101319', width + 4],
+        [shielding.get(thicknessKey(crossing.thickness_mm)).colour, width],
+      ]) {
+        elevationCtx.strokeStyle = colour;
+        elevationCtx.lineWidth = lineWidth;
+        elevationCtx.beginPath();
+        elevationCtx.moveTo(x, sy(crossing.base_z_m));
+        elevationCtx.lineTo(x, sy(crossing.top_z_m));
+        elevationCtx.stroke();
+      }
+    } else {
+      elevationCtx.strokeStyle = (wall && wall.color) || materialColour(crossing.material);
+      elevationCtx.globalAlpha = state.wallOpacity;
+      elevationCtx.lineWidth = Math.max((crossing.thickness_mm / 1000) * scale, 3);
+      elevationCtx.beginPath();
+      elevationCtx.moveTo(x, sy(crossing.base_z_m));
+      elevationCtx.lineTo(x, sy(crossing.top_z_m));
+      elevationCtx.stroke();
+    }
     elevationCtx.restore();
     elevationCtx.fillStyle = '#c7cedb';
     elevationCtx.font = '10px ui-monospace, monospace';
