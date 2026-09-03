@@ -2,8 +2,17 @@
 
 Data provenance: transcribed from NCRP Report No. 147 (2015 printing) by text
 extraction, then converted to CSV.  Known gaps in the extraction are declared
-in :data:`KNOWN_GAPS` and raised as informative errors at lookup time rather
-than silently returning a neighbouring value.
+in :data:`KNOWN_GAPS`.
+
+A kVp lookup (Table A.1 primary, Table C.1 secondary) that falls between two
+tabulated values is linearly interpolated between them -- alpha, beta and
+gamma independently -- with the substitution disclosed in
+``ArcherParams.source``, the same way a physicist reading the printed table
+by hand would use the nearer entries either side.  A kVp outside the
+tabulated range is not extrapolated: that has no support in the data to
+interpolate from, so it still raises rather than guessing.  A non-kVp lookup
+(workload-keyed Table B.1, or Table C.1's workload rows) has no ordering to
+interpolate along and is still exact-match only.
 
 Archer parameters here are in mm^-1, so thicknesses are in **mm** -- unlike
 TG-108's cm^-1 parameters.  ``ArcherParams.unit`` carries this.
@@ -68,18 +77,68 @@ def _archer_from_row(row: dict, material: str, source: str) -> ArcherParams:
     )
 
 
-def primary_archer_by_kvp(kvp: float, material: str) -> ArcherParams:
-    """Table A.1: primary broad-beam fit parameters at a single kVp."""
-    mat = canonical_material(material)
-    for row in load_table("ncrp147_primary_archer_kvp"):
-        if row["material"] == mat and float(row["kvp"]) == float(kvp):
-            return _archer_from_row(row, mat, f"NCRP 147 Table A.1, {kvp:g} kVp")
-    available = sorted(
-        float(r["kvp"]) for r in load_table("ncrp147_primary_archer_kvp") if r["material"] == mat
+def _interpolate_archer(
+    candidates: list[tuple[float, dict]],
+    kvp: float,
+    material: str,
+    table_label: str,
+    gap_note: str = "",
+) -> ArcherParams:
+    """Archer fit at ``kvp``, interpolating between the two rows bracketing it.
+
+    An exact match returns that row untouched -- no interpolation note, since
+    none was needed. Otherwise alpha, beta and gamma are each linearly
+    interpolated between the nearest tabulated kVp below and above, and the
+    substitution is disclosed in the returned params' ``source``. A ``kvp``
+    outside the tabulated range is not extrapolated, since a linear fit has
+    no support out there to guess from -- raises instead, same as a missing
+    exact match always has.
+    """
+    candidates = sorted(candidates, key=lambda c: c[0])
+    for row_kvp, row in candidates:
+        if row_kvp == kvp:
+            return _archer_from_row(row, material, f"{table_label}, {kvp:g} kVp")
+
+    lower = next((c for c in reversed(candidates) if c[0] < kvp), None)
+    upper = next((c for c in candidates if c[0] > kvp), None)
+    if lower is None or upper is None:
+        available = [c[0] for c in candidates]
+        note = f" Known extraction gaps: {gap_note}" if gap_note else ""
+        raise TableLookupError(
+            f"{kvp:g} kVp is outside the tabulated range for {material!r} in {table_label} "
+            f"({min(available):g}-{max(available):g} kVp); available exact values: "
+            f"{available}.{note}"
+        )
+
+    lo_kvp, lo_row = lower
+    hi_kvp, hi_row = upper
+    frac = (kvp - lo_kvp) / (hi_kvp - lo_kvp)
+
+    def interp(field: str) -> float:
+        return float(lo_row[field]) + frac * (float(hi_row[field]) - float(lo_row[field]))
+
+    return ArcherParams(
+        alpha=interp("alpha_per_mm"),
+        beta=interp("beta_per_mm"),
+        gamma=interp("gamma"),
+        unit="mm",
+        material=material,
+        source=f"{table_label}, interpolated between {lo_kvp:g} and {hi_kvp:g} kVp",
     )
-    raise TableLookupError(
-        f"no Table A.1 primary fit for {mat} at {kvp:g} kVp; available: {available}. "
-        f"Known extraction gaps: {KNOWN_GAPS[0]}"
+
+
+def primary_archer_by_kvp(kvp: float, material: str) -> ArcherParams:
+    """Table A.1: primary broad-beam fit parameters, interpolated by kVp."""
+    mat = canonical_material(material)
+    candidates = [
+        (float(row["kvp"]), row)
+        for row in load_table("ncrp147_primary_archer_kvp")
+        if row["material"] == mat
+    ]
+    if not candidates:
+        raise TableLookupError(f"no Table A.1 primary fit captured for {mat} at any kVp")
+    return _interpolate_archer(
+        candidates, float(kvp), mat, "NCRP 147 Table A.1", gap_note=KNOWN_GAPS[0]
     )
 
 
@@ -105,28 +164,31 @@ def secondary_archer(key: str, material: str, *, by_kvp: bool = False) -> Archer
 
     Args:
         key: Either a workload distribution name, or a kVp value as a string
-            when ``by_kvp`` is True.
+            when ``by_kvp`` is True -- interpolated between the two
+            tabulated kVp rows bracketing it when there is no exact match.
         material: Material name.
         by_kvp: Select the single-kVp rows rather than the workload rows.
     """
     mat = canonical_material(material)
     key_type = "kvp" if by_kvp else "workload"
-    for row in load_table("ncrp147_secondary_archer"):
-        if row["material"] == mat and row["key_type"] == key_type:
-            row_key = row["key"]
-            matches = (
-                float(row_key) == float(key) if by_kvp else str(row_key) == key
-            )
-            if matches:
-                label = f"{key} kVp" if by_kvp else str(key)
-                return _archer_from_row(row, mat, f"NCRP 147 Table C.1, {label}")
-    available = sorted(
-        str(r["key"])
-        for r in load_table("ncrp147_secondary_archer")
-        if r["material"] == mat and r["key_type"] == key_type
-    )
+    rows = [
+        row
+        for row in load_table("ncrp147_secondary_archer")
+        if row["material"] == mat and row["key_type"] == key_type
+    ]
+    if by_kvp:
+        candidates = [(float(row["key"]), row) for row in rows]
+        if not candidates:
+            raise TableLookupError(f"no Table C.1 secondary fit captured for {mat} at any kVp")
+        return _interpolate_archer(
+            candidates, float(key), mat, "NCRP 147 Table C.1", gap_note=KNOWN_GAPS[2]
+        )
+    for row in rows:
+        if str(row["key"]) == key:
+            return _archer_from_row(row, mat, f"NCRP 147 Table C.1, {key}")
+    available = sorted(str(row["key"]) for row in rows)
     raise TableLookupError(
-        f"no Table C.1 secondary fit for {mat} / {key!r} ({key_type}); available: {available}. "
+        f"no Table C.1 secondary fit for {mat} / {key!r} (workload); available: {available}. "
         f"Known extraction gaps: {KNOWN_GAPS[2]}"
     )
 

@@ -193,14 +193,22 @@ fits because they are pre-integrated over the clinical spectrum.
 
 ### Known gaps in the extraction
 
-Declared in `tables.KNOWN_GAPS` and raised as informative errors at lookup
-time. A missing entry never silently falls back to a neighbouring value.
+Declared in `tables.KNOWN_GAPS`. A kVp lookup (Table A.1 primary, Table C.1
+secondary) that falls between two tabulated values is linearly interpolated
+between them (alpha, beta, gamma independently), with the substitution
+disclosed in `ArcherParams.source` -- e.g. a CT tube at 130 kVp interpolates
+between the tabulated 125 and 140 kVp rows. A kVp outside the tabulated range
+still raises rather than extrapolating with no support for it, and a
+non-kVp lookup (workload-keyed Table B.1, or Table C.1's workload rows) has
+no ordering to interpolate along and is still exact-match only.
 
 1. **Table A.1**: 40 and 45 kVp captured for concrete only; other materials
-   jump 35 -> 50 kVp.
+   jump 35 -> 50 kVp (now bridged by interpolation for materials whose range
+   spans the gap, e.g. lead has 35 and 50 kVp rows either side).
 2. **Table B.1**: Peripheral Angiography missing for steel, plate glass, wood.
 3. **Table C.1**: for steel, plate glass and wood only 30, 50, 70, 125 and
    150 kVp were captured; the 100 kVp row and all workload rows are absent.
+   Lead and concrete additionally have 120 and 140 kVp rows.
 4. **Occupancy factors** were not part of the extraction. The shipped table is
    seeded from the published values and every row is flagged
    `NEEDS_VERIFICATION`. Verify against NCRP 147 Table B.1 before use in a
