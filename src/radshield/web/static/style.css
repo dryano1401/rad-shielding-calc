@@ -177,10 +177,17 @@ details pre { white-space: pre-wrap; color: var(--muted); font-size: 11px; margi
   padding: 6px 7px; margin-bottom: 5px;
 }
 .wall .top { display: flex; align-items: center; gap: 6px; }
-.wall .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.wall .swatch-picker {
+  width: 18px; height: 18px; flex: none; padding: 0; border: 1px solid var(--line);
+  border-radius: 3px; background: none; cursor: pointer;
+}
 .wall .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wall .detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+.wall .detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; display: flex; align-items: center; gap: 8px; }
 .wall button { padding: 2px 7px; }
+.linklike {
+  background: none; border: none; padding: 0; color: var(--accent);
+  font-size: 11.5px; cursor: pointer; text-decoration: underline;
+}
 
 .barrier-list { margin-top: 4px; }
 .barrier {

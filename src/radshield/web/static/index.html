@@ -117,6 +117,10 @@
       <label class="ghost-toggle"><input id="ghost" type="checkbox"> Show other floors</label>
       <label class="ghost-toggle" title="Scale barrier thickness by 1/cos(angle) for paths crossing at an angle">
         <input id="obliquity" type="checkbox"> Obliquity</label>
+      <label class="ghost-toggle" title="How solid drawn walls render -- turn this up for a clear screenshot showing where lead should go">
+        Wall opacity
+        <input id="wall-opacity" type="range" min="0.2" max="1" step="0.05" value="0.75">
+      </label>
     </div>
     <div id="canvas-wrap">
       <canvas id="plan"></canvas>

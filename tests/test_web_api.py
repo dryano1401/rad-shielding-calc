@@ -494,6 +494,27 @@ def test_wall_crud(client):
     assert project["floors"][0]["walls"] == []
 
 
+def test_wall_color_can_be_set_and_reset(client):
+    floor_id, _, _ = wall_scenario(client)
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete",
+        "thickness_mm": 200, "top_height_m": 3.0, "label": "Corridor wall",
+        "color": "#ff0000",
+    }).json()
+    wall = project["floors"][0]["walls"][0]
+    assert wall["color"] == "#ff0000"
+
+    # A wall drawn without a color falls back to "" (material default at render time).
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [10, -50], "p2": [10, 50], "material": "concrete",
+    }).json()
+    assert project["floors"][0]["walls"][1]["color"] == ""
+
+    project = client.patch(f"/api/floors/{floor_id}/walls/{wall['id']}",
+                           json={"color": ""}).json()
+    assert project["floors"][0]["walls"][0]["color"] == ""
+
+
 def test_wall_validation_is_enforced(client):
     floor_id, _, _ = wall_scenario(client)
     assert client.post(f"/api/floors/{floor_id}/walls", json={

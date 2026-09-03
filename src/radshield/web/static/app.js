@@ -26,6 +26,7 @@ const state = {
   resultsCollapsed: false,
   nuclides: null,           // /api/nuclides payload: every registered isotope
   nuclideDefault511: null,  // Archer fit new isotopes prefill from, per material
+  wallOpacity: 0.75,        // view-only: how solid drawn walls render, e.g. for a screenshot
 };
 
 const canvas = document.getElementById('plan');
@@ -369,9 +370,9 @@ function drawWalls(floor) {
     const scaled = floor.metres_per_unit
       ? (wall.thickness_mm / 1000) / floor.metres_per_unit * RENDER_ZOOM * state.view.scale
       : 5;
-    ctx.strokeStyle = materialColour(wall.material);
+    ctx.strokeStyle = wall.color || materialColour(wall.material);
     ctx.lineWidth = Math.max(scaled, 3);
-    ctx.globalAlpha = 0.75;
+    ctx.globalAlpha = state.wallOpacity;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
@@ -970,7 +971,8 @@ function renderWalls() {
     div.className = 'wall';
     div.innerHTML = `
       <div class="top">
-        <span class="swatch" style="background:${materialColour(wall.material)}"></span>
+        <input type="color" class="swatch-picker" value="${wall.color || materialColour(wall.material)}"
+               data-w="color" title="Wall color -- overrides the material default">
         <input class="name" type="text" value="${escapeHtml(wall.label)}"
                placeholder="unnamed wall" data-w="label">
         <button data-w="delete" title="Delete wall">×</button>
@@ -979,6 +981,7 @@ function renderWalls() {
         <select data-w="material">${(state.options?.materials || []).map(m =>
           `<option ${wall.material === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
         <span class="reading">${wallThicknessDisplay(wall.thickness_mm)}</span>
+        ${wall.color ? '<button data-w="reset-color" class="linklike" title="Use the material\'s default color">reset color</button>' : ''}
       </div>
       <div class="wall-fields">
         <label>Thickness (${wallUnitLabel()})
@@ -1003,6 +1006,9 @@ function renderWalls() {
     };
     div.querySelector('[data-w=top]').onchange = e =>
       patch({ top_height_m: parseFloat(e.target.value) });
+    div.querySelector('[data-w=color]').onchange = e => patch({ color: e.target.value });
+    const resetColor = div.querySelector('[data-w=reset-color]');
+    if (resetColor) resetColor.onclick = () => patch({ color: '' });
     div.querySelector('[data-w=delete]').onclick = async () =>
       setProject(await api(`/api/floors/${floor.id}/walls/${wall.id}`, { method: 'DELETE' }));
     list.appendChild(div);
@@ -1752,6 +1758,10 @@ document.getElementById('ghost').onchange = event => {
 document.getElementById('obliquity').onchange = async event => {
   setProject(await send('/api/project/obliquity', 'POST', { enabled: event.target.checked }));
   if (state.results) calculate();
+};
+document.getElementById('wall-opacity').oninput = event => {
+  state.wallOpacity = parseFloat(event.target.value);
+  draw();
 };
 document.getElementById('btn-calculate').onclick = () => calculate().catch(e => alert(e.message));
 document.getElementById('btn-collapse-results').onclick = () => {

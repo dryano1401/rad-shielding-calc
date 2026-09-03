@@ -431,6 +431,7 @@ def add_wall(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
             base_height_m=float(payload.get("base_height_m", 0.0)),
             top_height_m=float(payload.get("top_height_m", 3.0)),
             label=payload.get("label", ""),
+            color=payload.get("color", ""),
         )
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -440,7 +441,7 @@ def add_wall(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.patch("/api/floors/{floor_id}/walls/{wall_id}")
 def update_wall(floor_id: str, wall_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Change a wall's material, thickness, height or label."""
+    """Change a wall's material, thickness, height, label or display color."""
     try:
         floor = session.project.floor(floor_id)
     except KeyError as exc:
@@ -455,6 +456,7 @@ def update_wall(floor_id: str, wall_id: str, payload: dict[str, Any]) -> dict[st
         "base_height_m": float(payload.get("base_height_m", wall.base_height_m)),
         "top_height_m": float(payload.get("top_height_m", wall.top_height_m)),
         "label": payload.get("label", wall.label),
+        "color": payload.get("color", wall.color),
     }
     try:
         replacement = Wall(id=wall.id, p1=wall.p1, p2=wall.p2, **updated)
