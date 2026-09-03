@@ -2154,44 +2154,54 @@ function drawElevationDot(point, color) {
 
 // Overlays a source's elevation-plane scatter chart onto the cross-section,
 // the same way the plan canvas overlays a plan chart's grid values -- each
-// cell placed at its true position, projected onto the vertical plane the
-// chosen source-to-point path defines. The projection mirrors
-// chartCellPdfPos()'s east/north rotation, with the chart's own x axis (the
-// equipment's table axis) taking the place of that function's "local y" --
-// an elevation chart has no depth dimension of its own.
-function drawElevationChartGrid(sx, sy) {
+// cell placed at its own position in the chart's natural axes (table-axis
+// offset by height), centred on the source.
+//
+// An elevation chart is inherently a 2D slice along the equipment's table
+// axis; it carries no data for how dose varies off that axis. Projecting it
+// onto whichever source-to-point line happens to be chosen would squash it
+// unrecognisably whenever that path isn't along the table axis (most of the
+// time), so instead this draws the chart the way it was published -- as its
+// own side view, sharing the source's horizontal_m = 0 origin with the rest
+// of the cross-section.
+function elevationChartCells() {
   const profile = state.elevation;
   const source = state.project.sources.find(s => s.id === document.getElementById('elev-source').value);
-  const mapId = source?.params?.elevation_map_id;
-  const chart = (state.project.scatter_maps || []).find(m => m.id === mapId);
-  if (!profile || !source || !chart) return;
+  const chart = (state.project.scatter_maps || [])
+    .find(m => m.id === source?.params?.elevation_map_id);
+  if (!profile || !chart) return [];
 
-  const [ux, uy] = profile.bearing;
-  const theta = (source.rotation_deg || 0) * Math.PI / 180;
   const unitScale = CHART_COORDINATE_UNITS_M[chart.coordinate_unit] ?? 1;
+  const cells = [];
+  for (let row = 0; row < chart.y_coords.length; row++) {
+    for (let col = 0; col < chart.x_coords.length; col++) {
+      cells.push({
+        value: chart.values[row]?.[col],
+        horizontal: chart.x_coords[col] * unitScale * (chart.flip_x ? -1 : 1),
+        height: profile.source.height_m
+          + chart.y_coords[row] * unitScale * (chart.flip_y ? -1 : 1),
+      });
+    }
+  }
+  return cells;
+}
 
+function drawElevationChartGrid(sx, sy, cells) {
   elevationCtx.save();
   elevationCtx.font = '10px ui-monospace, monospace';
   elevationCtx.textAlign = 'center';
   elevationCtx.textBaseline = 'bottom';
-  for (let row = 0; row < chart.y_coords.length; row++) {
-    for (let col = 0; col < chart.x_coords.length; col++) {
-      const value = chart.values[row]?.[col];
-      const tableAxis = chart.x_coords[col] * unitScale * (chart.flip_x ? -1 : 1);
-      const height = chart.y_coords[row] * unitScale * (chart.flip_y ? -1 : 1);
-      const east = -tableAxis * Math.sin(theta);
-      const north = tableAxis * Math.cos(theta);
-      const p = { x: sx(east * ux + north * uy), y: sy(profile.source.height_m + height) };
-      const text = value == null ? 'NA' : String(value);
-      const width = elevationCtx.measureText(text).width;
-      elevationCtx.fillStyle = 'rgba(10,12,16,.82)';
-      elevationCtx.fillRect(p.x - width / 2 - 2, p.y - 15, width + 4, 13);
-      elevationCtx.fillStyle = value == null ? '#ff6a6a' : '#ffd600';
-      elevationCtx.beginPath();
-      elevationCtx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-      elevationCtx.fill();
-      elevationCtx.fillText(text, p.x, p.y - 3);
-    }
+  for (const cell of cells) {
+    const p = { x: sx(cell.horizontal), y: sy(cell.height) };
+    const text = cell.value == null ? 'NA' : String(cell.value);
+    const width = elevationCtx.measureText(text).width;
+    elevationCtx.fillStyle = 'rgba(10,12,16,.82)';
+    elevationCtx.fillRect(p.x - width / 2 - 2, p.y - 15, width + 4, 13);
+    elevationCtx.fillStyle = cell.value == null ? '#ff6a6a' : '#ffd600';
+    elevationCtx.beginPath();
+    elevationCtx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+    elevationCtx.fill();
+    elevationCtx.fillText(text, p.x, p.y - 3);
   }
   elevationCtx.restore();
 }
@@ -2210,15 +2220,20 @@ function drawElevation() {
   if (!profile || !rect.width || !rect.height) return;
 
   const pad = 56;
+  // The chart, when shown, runs further out than the path itself, so it has
+  // to be fitted alongside it or its outer columns fall off the canvas.
+  const cells = state.elevationShowGrid ? elevationChartCells() : [];
   const heights = [
     ...profile.floors.map(([, elevationM]) => elevationM),
     profile.source.height_m, profile.target.height_m,
     ...profile.crossings.map(c => c.top_z_m),
+    ...cells.map(c => c.height),
   ];
+  const horizontals = [0, profile.horizontal_total_m, ...cells.map(c => c.horizontal)];
   const minH = Math.min(...heights) - 0.5;
   const maxH = Math.max(...heights) + 0.5;
-  const minX = Math.min(0, profile.horizontal_total_m) - 0.5;
-  const maxX = Math.max(0, profile.horizontal_total_m) + 0.5;
+  const minX = Math.min(...horizontals) - 0.5;
+  const maxX = Math.max(...horizontals) + 0.5;
   const scale = Math.min(
     (rect.width - 2 * pad) / Math.max(maxX - minX, 0.1),
     (rect.height - 2 * pad) / Math.max(maxH - minH, 0.1),
@@ -2263,7 +2278,7 @@ function drawElevation() {
     elevationCtx.fillText(crossing.label, x, sy(crossing.top_z_m) - 4);
   }
 
-  if (state.elevationShowGrid) drawElevationChartGrid(sx, sy);
+  if (cells.length) drawElevationChartGrid(sx, sy, cells);
 
   // The ray itself, and its vertical angle.
   const p1 = { x: sx(profile.source.horizontal_m), y: sy(profile.source.height_m) };

@@ -515,7 +515,6 @@ class ElevationProfile:
     target: ElevationEndpoint
     horizontal_total_m: float
     vertical_angle_deg: float
-    bearing: tuple[float, float]
     floors: list[tuple[str, float]]
     crossings: list[Crossing]
     warnings: list[str] = field(default_factory=list)
@@ -555,7 +554,6 @@ def elevation_profile(
             f"source {source.label or source.id!r} and point {poi.label or poi.id!r} are "
             "coincident; move one of them"
         )
-    bearing = (dx / horizontal_total, dy / horizontal_total) if horizontal_total > 1e-9 else (1.0, 0.0)
     vertical_angle = math.degrees(math.atan2(poi_z - source_z, horizontal_total))
 
     crossings, wall_warnings = path_barriers(project, source, poi, apply_obliquity=apply_obliquity)
@@ -575,7 +573,6 @@ def elevation_profile(
         ),
         horizontal_total_m=horizontal_total,
         vertical_angle_deg=vertical_angle,
-        bearing=bearing,
         floors=floors,
         crossings=drawable,
         warnings=warnings,
