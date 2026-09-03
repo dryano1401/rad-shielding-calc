@@ -497,6 +497,35 @@ function drawWalls(floor) {
     segment();
   }
 
+  const selected = selectedWall();
+  if (selected && (floor.walls || []).includes(selected)) {
+    const a = toScreen(selected.p1[0], selected.p1[1]);
+    const b = toScreen(selected.p2[0], selected.p2[1]);
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Square handles, lettered, so the inspector can say which end a typed
+    // length moves without the user having to guess.
+    ctx.font = 'bold 10px system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [end, point] of [['A', a], ['B', b]]) {
+      ctx.fillStyle = '#12151a';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.fillRect(point.x - 6, point.y - 6, 12, 12);
+      ctx.strokeRect(point.x - 6, point.y - 6, 12, 12);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(end, point.x, point.y + 0.5);
+    }
+  }
+
   if (state.tool === 'wall' && state.wallPick.length === 1 && state.hover) {
     const a = toScreen(state.wallPick[0].x, state.wallPick[0].y);
     const b = toScreen(state.hover.x, state.hover.y);
@@ -783,10 +812,40 @@ function label(x, y, text, colour, alpha) {
   ctx.restore();
 }
 
+// Distance from a point to a segment, all in PDF space, plus where along the
+// segment the nearest point falls (0 at p1, 1 at p2).
+function distanceToSegment(pdf, p1, p2) {
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  const lengthSquared = dx * dx + dy * dy;
+  const along = lengthSquared
+    ? Math.min(Math.max(((pdf.x - p1[0]) * dx + (pdf.y - p1[1]) * dy) / lengthSquared, 0), 1)
+    : 0;
+  return {
+    distance: Math.hypot(pdf.x - (p1[0] + along * dx), pdf.y - (p1[1] + along * dy)),
+    along,
+  };
+}
+
+const selectedWall = () => (state.selection?.kind === 'wall'
+  ? (currentFloor()?.walls || []).find(w => w.id === state.selection.id) || null
+  : null);
+
 function hitTest(pdf) {
   const floor = currentFloor();
   if (!floor) return null;
   const tolerance = 11 / (state.view.scale * RENDER_ZOOM);
+
+  // The selected wall's end handles come first: they are only on screen when
+  // that wall is selected, and grabbing one is always the intended action.
+  const selected = selectedWall();
+  if (selected) {
+    for (const end of ['p1', 'p2']) {
+      if (Math.hypot(selected[end][0] - pdf.x, selected[end][1] - pdf.y) < tolerance) {
+        return { kind: 'wall-end', id: selected.id, end };
+      }
+    }
+  }
+
   const { sources, pois } = pointsOnFloor(floor.id);
   for (const poi of pois) {
     if (Math.hypot(poi.x - pdf.x, poi.y - pdf.y) < tolerance) return { kind: 'poi', id: poi.id };
@@ -794,6 +853,12 @@ function hitTest(pdf) {
   for (const source of sources) {
     if (Math.hypot(source.x - pdf.x, source.y - pdf.y) < tolerance) {
       return { kind: 'source', id: source.id };
+    }
+  }
+  // Walls last, so a marker sitting on one still wins the click.
+  for (const wall of floor.walls || []) {
+    if (distanceToSegment(pdf, wall.p1, wall.p2).distance < tolerance) {
+      return { kind: 'wall', id: wall.id };
     }
   }
   return null;
@@ -807,7 +872,15 @@ canvas.addEventListener('mousedown', event => {
 
   if (state.tool === 'select') {
     const hit = hitTest(pdf);
-    if (hit) {
+    if (hit?.kind === 'wall-end') {
+      state.drag = { ...hit, moved: false };
+    } else if (hit?.kind === 'wall') {
+      // Selecting a wall does not start moving it -- the drag keeps panning,
+      // so the only way to change a wall's geometry is to grab an end handle
+      // deliberately.
+      state.drag = { pan: true, x: event.clientX, y: event.clientY };
+      select(hit);
+    } else if (hit) {
       const item = hit.kind === 'poi'
         ? state.project.pois.find(p => p.id === hit.id)
         : state.project.sources.find(s => s.id === hit.id);
@@ -852,6 +925,18 @@ canvas.addEventListener('mousemove', event => {
   }
 
   const pdf = eventPdf(event);
+  if (state.drag.kind === 'wall-end') {
+    const wall = (currentFloor()?.walls || []).find(w => w.id === state.drag.id);
+    if (!wall) return;
+    wall[state.drag.end] = [pdf.x, pdf.y];
+    state.drag.moved = true;
+    const metres = pdfSegmentMetres(currentFloor(), pointOf(wall.p1), pointOf(wall.p2));
+    setStatus(metres === null
+      ? 'This floor has no scale yet — the wall length cannot be read off it.'
+      : `Wall length: ${formatLength(metres)}`);
+    draw();
+    return;
+  }
   const list = state.drag.kind === 'poi' ? state.project.pois : state.project.sources;
   const item = list.find(i => i.id === state.drag.id);
   item.x = pdf.x + state.drag.dx;
@@ -860,10 +945,28 @@ canvas.addEventListener('mousemove', event => {
   draw();
 });
 
+// Walls store their ends as [x, y] pairs; the segment helpers take {x, y}.
+const pointOf = ([x, y]) => ({ x, y });
+
 window.addEventListener('mouseup', async () => {
   const drag = state.drag;
   state.drag = null;
   if (!drag || drag.pan || !drag.moved) return;
+  if (drag.kind === 'wall-end') {
+    const floor = currentFloor();
+    const wall = (floor?.walls || []).find(w => w.id === drag.id);
+    if (!wall) return;
+    try {
+      setProject(await send(`/api/floors/${floor.id}/walls/${wall.id}`, 'PATCH',
+        { p1: wall.p1, p2: wall.p2 }));
+    } catch (error) {
+      alert(error.message);
+      // The dragged end only lived in the local copy, so reloading the
+      // project puts the wall back where the server still has it.
+      setProject(await api('/api/project'));
+    }
+    return;
+  }
   const list = drag.kind === 'poi' ? state.project.pois : state.project.sources;
   const item = list.find(i => i.id === drag.id);
   const path = drag.kind === 'poi' ? `/api/pois/${drag.id}` : `/api/sources/${drag.id}`;
@@ -1020,7 +1123,7 @@ function setTool(tool) {
     button.classList.toggle('active', button.dataset.tool === tool);
   });
   const help = {
-    select: 'Drag a point to move it. Drag the drawing to pan, scroll to zoom.',
+    select: 'Click a wall or point to select it. Drag a point, or a selected wall\'s end handle, to move it. Drag the drawing to pan, scroll to zoom.',
     calibrate: 'Click two points a known distance apart on this drawing.',
     align: 'Click two features that appear on every floor (columns, stair core, lift shaft). Two are needed to fix rotation as well as position.',
     measure: 'Click two points to measure the distance between them, e.g. a wall standoff.',
@@ -1086,7 +1189,8 @@ function renderWalls() {
   list.innerHTML = '';
   for (const wall of (floor?.walls || [])) {
     const div = document.createElement('div');
-    div.className = 'wall';
+    div.className = 'wall' + (state.selection?.kind === 'wall' && state.selection.id === wall.id
+      ? ' selected' : '');
     div.innerHTML = `
       <div class="top">
         <input type="color" class="swatch-picker" value="${wall.color || materialColour(wall.material)}"
@@ -1129,6 +1233,12 @@ function renderWalls() {
     if (resetColor) resetColor.onclick = () => patch({ color: '' });
     div.querySelector('[data-w=delete]').onclick = async () =>
       setProject(await api(`/api/floors/${floor.id}/walls/${wall.id}`, { method: 'DELETE' }));
+    // Clicking the row's own background selects the wall on the drawing; the
+    // controls inside it keep their own behaviour.
+    div.onclick = event => {
+      if (event.target.closest('input, select, button')) return;
+      select({ kind: 'wall', id: wall.id });
+    };
     list.appendChild(div);
   }
   if (!floor?.walls?.length) {
@@ -1323,8 +1433,92 @@ function renderInspector() {
     box.innerHTML = '<p class="hint">Place a source or a point of interest, then select it to edit its parameters.</p>';
     return;
   }
-  if (state.selection.kind === 'source') renderSourceInspector(title, box);
+  if (state.selection.kind === 'wall') renderWallInspector(title, box);
+  else if (state.selection.kind === 'source') renderSourceInspector(title, box);
   else renderPoiInspector(title, box);
+}
+
+function renderWallInspector(title, box) {
+  const floor = currentFloor();
+  const wall = selectedWall();
+  if (!wall) {
+    // The selected wall is on another floor, or has been deleted.
+    title.textContent = 'Nothing selected';
+    box.innerHTML = '<p class="hint">That wall is not on the floor being viewed.</p>';
+    return;
+  }
+  title.textContent = wall.label || 'Wall';
+  const metres = pdfSegmentMetres(floor, pointOf(wall.p1), pointOf(wall.p2));
+  const angle = Math.atan2(wall.p2[1] - wall.p1[1], wall.p2[0] - wall.p1[0]) * 180 / Math.PI;
+
+  box.innerHTML = `
+    <div class="field">Label<input type="text" value="${escapeHtml(wall.label)}"
+      placeholder="unnamed wall" data-w="label"></div>
+    <div class="field">Material
+      <select data-w="material">${(state.options?.materials || []).map(m =>
+        `<option ${wall.material === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
+    </div>
+    <div class="field">Thickness (${wallUnitLabel()})
+      <input type="number" step="0.01" min="0"
+             value="${wallThicknessFromMm(wall.thickness_mm).toFixed(2)}" data-w="thickness"></div>
+    <div class="field">Length (${displayUnit()})
+      ${metres === null
+        ? '<span class="reading">floor not calibrated</span>'
+        : `<input type="number" step="0.01" min="0"
+                  value="${fromMetres(metres).toFixed(2)}" data-w="length">`}</div>
+    <p class="hint">Typing a length moves end <strong>B</strong>, keeping the wall's
+      direction and end A where they are. Drag either square handle on the drawing
+      to change the length and the angle together.</p>
+    <div class="row">
+      <label>Base (m)<input type="number" step="0.1" value="${wall.base_height_m}" data-w="base"></label>
+      <label>Top (m)<input type="number" step="0.1" value="${wall.top_height_m}" data-w="top"></label>
+    </div>
+    <div class="field">Color
+      <input type="color" class="swatch-picker" data-w="color"
+             value="${wall.color || materialColour(wall.material)}">
+      ${wall.color ? '<button data-w="reset-color" class="linklike">reset color</button>' : ''}
+    </div>
+    <p class="hint">Bearing on the drawing: ${angle.toFixed(1)}°.
+      ${metres === null ? '' : `Drawn thickness ${wallThicknessDisplay(wall.thickness_mm)}.`}</p>
+    <button data-w="delete" class="wide">Delete wall</button>`;
+
+  const patch = async body => {
+    try { setProject(await send(`/api/floors/${floor.id}/walls/${wall.id}`, 'PATCH', body)); }
+    catch (error) { alert(error.message); renderInspector(); }
+  };
+  box.querySelector('[data-w=label]').onchange = e => patch({ label: e.target.value });
+  box.querySelector('[data-w=material]').onchange = e => patch({ material: e.target.value });
+  box.querySelector('[data-w=thickness]').onchange = e => {
+    const entered = parseFloat(e.target.value);
+    if (!(entered > 0)) { alert('Wall thickness must be greater than zero.'); renderInspector(); return; }
+    patch({ thickness_mm: wallThicknessToMm(entered) });
+  };
+  box.querySelector('[data-w=base]').onchange = e => patch({ base_height_m: parseFloat(e.target.value) });
+  box.querySelector('[data-w=top]').onchange = e => patch({ top_height_m: parseFloat(e.target.value) });
+  box.querySelector('[data-w=color]').onchange = e => patch({ color: e.target.value });
+  const resetColor = box.querySelector('[data-w=reset-color]');
+  if (resetColor) resetColor.onclick = () => patch({ color: '' });
+  box.querySelector('[data-w=delete]').onclick = async () => {
+    setProject(await api(`/api/floors/${floor.id}/walls/${wall.id}`, { method: 'DELETE' }));
+    select(null);
+  };
+
+  const lengthInput = box.querySelector('[data-w=length]');
+  if (lengthInput) {
+    lengthInput.onchange = e => {
+      const wanted = toMetres(parseFloat(e.target.value));
+      if (!(wanted > 0)) { alert('Wall length must be greater than zero.'); renderInspector(); return; }
+      // Scale the existing direction to the requested real length, so the
+      // wall keeps its bearing and only end B moves.
+      const factor = wanted / metres;
+      patch({
+        p2: [
+          wall.p1[0] + (wall.p2[0] - wall.p1[0]) * factor,
+          wall.p1[1] + (wall.p2[1] - wall.p1[1]) * factor,
+        ],
+      });
+    };
+  }
 }
 
 // What the chart assigned to a source quotes its values per.

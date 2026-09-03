@@ -51,6 +51,10 @@ def test_wall_rejects_impossible_geometry():
         Wall(id="w", p1=(0, 0), p2=(10, 0), thickness_mm=0)
     with pytest.raises(ValueError, match="must be above its base"):
         Wall(id="w", p1=(0, 0), p2=(10, 0), base_height_m=3.0, top_height_m=2.0)
+    # The intersection test skips a zero-length wall, so one would sit on the
+    # drawing looking like a barrier while shielding nothing.
+    with pytest.raises(ValueError, match="two distinct ends"):
+        Wall(id="w", p1=(4, 7), p2=(4, 7))
 
 
 def test_path_crossing_a_wall_is_detected():

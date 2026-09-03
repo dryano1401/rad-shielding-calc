@@ -552,6 +552,29 @@ def test_wall_validation_is_enforced(client):
         "p1": [0, 0], "p2": [10, 0], "thickness_mm": 0}).status_code == 400
     assert client.post(f"/api/floors/{floor_id}/walls", json={
         "p1": [0, 0], "p2": [10, 0], "base_height_m": 3, "top_height_m": 1}).status_code == 400
+    assert client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [5, 5], "p2": [5, 5]}).status_code == 400
+
+
+def test_wall_ends_can_be_moved_to_change_its_length(client):
+    """Dragging an end handle on the drawing patches the wall's coordinates."""
+    floor_id, _, _ = wall_scenario(client)
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete", "thickness_mm": 200,
+    }).json()
+    wall_id = project["floors"][0]["walls"][0]["id"]
+
+    project = client.patch(f"/api/floors/{floor_id}/walls/{wall_id}",
+                           json={"p2": [0, 25]}).json()
+    wall = project["floors"][0]["walls"][0]
+    assert wall["p2"] == [0, 25]
+    assert wall["p1"] == [0, -50]        # the end that was not dragged stays put
+    assert wall["thickness_mm"] == 200   # and nothing else is disturbed
+
+    # Collapsing a wall onto a point would leave it drawn but shielding
+    # nothing, so it is refused rather than silently accepted.
+    assert client.patch(f"/api/floors/{floor_id}/walls/{wall_id}",
+                        json={"p2": [0, -50]}).status_code == 400
 
 
 def test_drawn_wall_attenuates_the_dose_and_shows_in_results(client):

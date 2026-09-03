@@ -255,6 +255,11 @@ class Wall:
     color: str = ""
 
     def __post_init__(self) -> None:
+        if (self.p1[0] - self.p2[0]) ** 2 + (self.p1[1] - self.p2[1]) ** 2 < 1e-12:
+            # A zero-length wall is not merely useless: the path intersection
+            # test skips it, so it would sit on the drawing looking like a
+            # barrier while shielding nothing.
+            raise ValueError("a wall must have two distinct ends; it has no length")
         if self.thickness_mm <= 0:
             raise ValueError(f"wall thickness must be positive, got {self.thickness_mm}")
         if self.thickness_mm > MAX_WALL_THICKNESS_MM:

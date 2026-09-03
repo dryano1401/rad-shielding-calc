@@ -176,6 +176,7 @@ details pre { white-space: pre-wrap; color: var(--muted); font-size: 11px; margi
   border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2);
   padding: 6px 7px; margin-bottom: 5px;
 }
+.wall.selected { border-color: var(--accent); background: var(--panel-2); }
 .wall .top { display: flex; align-items: center; gap: 6px; }
 .wall .swatch-picker {
   width: 18px; height: 18px; flex: none; padding: 0; border: 1px solid var(--line);

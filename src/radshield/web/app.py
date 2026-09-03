@@ -443,7 +443,7 @@ def add_wall(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.patch("/api/floors/{floor_id}/walls/{wall_id}")
 def update_wall(floor_id: str, wall_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Change a wall's material, thickness, height, label or display color."""
+    """Change a wall's ends, material, thickness, height, label or display color."""
     try:
         floor = session.project.floor(floor_id)
     except KeyError as exc:
@@ -461,8 +461,12 @@ def update_wall(floor_id: str, wall_id: str, payload: dict[str, Any]) -> dict[st
         "color": payload.get("color", wall.color),
     }
     try:
-        replacement = Wall(id=wall.id, p1=wall.p1, p2=wall.p2, **updated)
-    except ValueError as exc:
+        ends = {
+            key: tuple(payload[key]) if key in payload else getattr(wall, key)
+            for key in ("p1", "p2")
+        }
+        replacement = Wall(id=wall.id, **ends, **updated)
+    except (ValueError, TypeError) as exc:
         raise HTTPException(400, str(exc)) from exc
     floor.walls[floor.walls.index(wall)] = replacement
     return _project_payload()
