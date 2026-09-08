@@ -333,6 +333,10 @@ class Crossing:
     hit_height_m: float | None = None
     base_z_m: float | None = None
     top_z_m: float | None = None
+    # True for a wall the path passes clear over or under. It shields nothing
+    # and never reaches the physics; it exists so a cross-section can show
+    # the ray going past a wall rather than silently omitting it.
+    cleared: bool = False
 
     @property
     def is_oblique(self) -> bool:
@@ -347,30 +351,30 @@ def world_point(project: Project, floor: Floor, x: float, y: float, height_m: fl
     return east, north, floor.elevation_m + height_m
 
 
-def wall_crossing(
+@dataclass(frozen=True)
+class _WallHit:
+    """Where a path meets a wall's plane, before the height band is tested."""
+
+    hit_z: float
+    base_z: float
+    top_z: float
+    cos_theta: float
+    distance_along_m: float
+
+
+def _wall_plane_hit(
     project: Project,
     floor: Floor,
     wall: Wall,
     start: tuple[float, float, float],
     end: tuple[float, float, float],
-    *,
-    apply_obliquity: bool = False,
-) -> Crossing | None:
-    """Return the crossing if the segment ``start``-``end`` passes through ``wall``.
+) -> _WallHit | None:
+    """Where the segment meets the wall's vertical plane, within its plan extent.
 
-    The wall is treated as a vertical rectangle: its plan segment extruded
-    between its base and top heights.  This is what makes a single test work
-    for paths within a storey and paths between storeys -- a partition that
-    stops at 3 m simply is not in the way of a ray that has already climbed
-    above it.
-
-    Args:
-        apply_obliquity: Scale the traversed thickness by ``1 / cos(theta)``
-            for a path crossing at ``theta`` from the wall normal.  Off by
-            default, which under-counts material and so errs safe.
-
-    Returns:
-        The crossing, or None when the path misses the wall.
+    Height is deliberately not tested here.  Keeping the plan intersection
+    separate from the height band is what lets one caller ask "does this go
+    through the wall" and another ask "does it pass clear over it", off the
+    same arithmetic rather than two copies that could drift apart.
     """
     ax, ay, _ = world_point(project, floor, wall.p1[0], wall.p1[1], 0.0)
     bx, by, _ = world_point(project, floor, wall.p2[0], wall.p2[1], 0.0)
@@ -398,21 +402,57 @@ def wall_crossing(
 
     hit_x = start[0] + t * dx
     hit_y = start[1] + t * dy
-    hit_z = start[2] + t * dz
 
     # Within the wall's extent in plan?
     along = ((hit_x - ax) * wall_dx + (hit_y - ay) * wall_dy) / (wall_length**2)
     if not 0.0 <= along <= 1.0:
         return None
 
-    # Within the wall's height band?
-    base_z = floor.elevation_m + wall.base_height_m
-    top_z = floor.elevation_m + wall.top_height_m
-    if not base_z <= hit_z <= top_z:
+    path_length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    return _WallHit(
+        hit_z=start[2] + t * dz,
+        base_z=floor.elevation_m + wall.base_height_m,
+        top_z=floor.elevation_m + wall.top_height_m,
+        cos_theta=abs(denominator) / path_length if path_length else 1.0,
+        distance_along_m=t * math.hypot(dx, dy),
+    )
+
+
+def wall_crossing(
+    project: Project,
+    floor: Floor,
+    wall: Wall,
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+    *,
+    apply_obliquity: bool = False,
+) -> Crossing | None:
+    """Return the crossing if the segment ``start``-``end`` passes through ``wall``.
+
+    The wall is treated as a vertical rectangle: its plan segment extruded
+    between its base and top heights.  This is what makes a single test work
+    for paths within a storey and paths between storeys -- a partition that
+    stops at 3 m simply is not in the way of a ray that has already climbed
+    above it.
+
+    Args:
+        apply_obliquity: Scale the traversed thickness by ``1 / cos(theta)``
+            for a path crossing at ``theta`` from the wall normal.  Off by
+            default, which under-counts material and so errs safe.
+
+    Returns:
+        The crossing, or None when the path misses the wall.
+    """
+    hit = _wall_plane_hit(project, floor, wall, start, end)
+    if hit is None:
         return None
 
-    path_length = math.sqrt(dx * dx + dy * dy + dz * dz)
-    cos_theta = abs(dx * nx + dy * ny) / path_length if path_length else 1.0
+    # Within the wall's height band?
+    if not hit.base_z <= hit.hit_z <= hit.top_z:
+        return None
+
+    hit_z, base_z, top_z = hit.hit_z, hit.base_z, hit.top_z
+    cos_theta = hit.cos_theta
     angle = math.degrees(math.acos(min(max(cos_theta, -1.0), 1.0)))
 
     effective = wall.thickness_mm
@@ -427,10 +467,45 @@ def wall_crossing(
         angle_deg=angle,
         wall_id=wall.id,
         floor_name=floor.name,
-        distance_along_m=t * math.hypot(dx, dy),
+        distance_along_m=hit.distance_along_m,
         hit_height_m=hit_z,
         base_z_m=base_z,
         top_z_m=top_z,
+    )
+
+
+def wall_clearance(
+    project: Project,
+    floor: Floor,
+    wall: Wall,
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+) -> Crossing | None:
+    """Return the wall if the path passes clear over or under it.
+
+    The counterpart to :func:`wall_crossing`: same plan intersection, but
+    returned only when the height band is *missed*.  Such a wall shields
+    nothing and must never reach the physics, but it is exactly what a
+    cross-section needs in order to show why -- a path climbing to the storey
+    above clears a 2.1 m partition within a metre of the source, and a
+    drawing that simply omitted the wall would look like an error rather than
+    like a ray going over it.
+    """
+    hit = _wall_plane_hit(project, floor, wall, start, end)
+    if hit is None or hit.base_z <= hit.hit_z <= hit.top_z:
+        return None
+    return Crossing(
+        material=wall.material,
+        thickness_mm=wall.thickness_mm,
+        effective_thickness_mm=0.0,
+        label=wall.label or f"{wall.material} wall",
+        wall_id=wall.id,
+        floor_name=floor.name,
+        distance_along_m=hit.distance_along_m,
+        hit_height_m=hit.hit_z,
+        base_z_m=hit.base_z,
+        top_z_m=hit.top_z,
+        cleared=True,
     )
 
 
@@ -517,6 +592,9 @@ class ElevationProfile:
     vertical_angle_deg: float
     floors: list[tuple[str, float]]
     crossings: list[Crossing]
+    cleared: list[Crossing] = field(default_factory=list)
+    declared: list[Crossing] = field(default_factory=list)
+    floor_crossings: list[tuple[str, float, float]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -559,8 +637,42 @@ def elevation_profile(
     crossings, wall_warnings = path_barriers(project, source, poi, apply_obliquity=apply_obliquity)
     warnings.extend(wall_warnings)
     drawable = [c for c in crossings if c.wall_id is not None]
+    # A declared barrier has no drawn position, but it is still on the path
+    # and is often the only thing shielding a route between floors, so it is
+    # reported rather than dropped -- leaving the section empty would say
+    # there is nothing in the way when there is.
+    declared = [c for c in crossings if c.wall_id is None]
+
+    # Walls the path goes over or under. Not barriers -- shown so the section
+    # explains itself when a climbing path meets nothing.
+    poi_height, _ = target_height(source_floor, poi_floor, poi)
+    ray_start = world_point(project, source_floor, source.x, source.y,
+                            source.height_above_floor_m)
+    ray_end = world_point(project, poi_floor, poi.x, poi.y, poi_height)
+    cleared: list[Crossing] = []
+    for floor in project.floors:
+        if floor.calibration is None:
+            continue
+        for wall in floor.walls:
+            missed = wall_clearance(project, floor, wall, ray_start, ray_end)
+            if missed is not None:
+                cleared.append(missed)
 
     floors = sorted(((f.name, f.elevation_m) for f in project.floors), key=lambda item: item[1])
+
+    # Where the ray passes each floor level between its two ends.  This is
+    # real geometry, and for a path between storeys it is where a slab sits,
+    # which is the only place a declared barrier can honestly be drawn.
+    floor_crossings: list[tuple[str, float, float]] = []
+    span = poi_z - source_z
+    if abs(span) > 1e-9:
+        for floor in project.floors:
+            fraction = (floor.elevation_m - source_z) / span
+            if 0.0 < fraction < 1.0:
+                floor_crossings.append(
+                    (floor.name, floor.elevation_m, fraction * horizontal_total)
+                )
+        floor_crossings.sort(key=lambda item: item[2])
 
     return ElevationProfile(
         source=ElevationEndpoint(
@@ -575,6 +687,9 @@ def elevation_profile(
         vertical_angle_deg=vertical_angle,
         floors=floors,
         crossings=drawable,
+        cleared=cleared,
+        declared=declared,
+        floor_crossings=floor_crossings,
         warnings=warnings,
     )
 

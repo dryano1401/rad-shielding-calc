@@ -2543,9 +2543,14 @@ function drawElevation() {
     ...profile.floors.map(([, elevationM]) => elevationM),
     profile.source.height_m, profile.target.height_m,
     ...profile.crossings.map(c => c.top_z_m),
+    ...(profile.cleared || []).map(c => c.top_z_m),
     ...cells.map(c => c.height),
   ];
-  const horizontals = [0, profile.horizontal_total_m, ...cells.map(c => c.horizontal)];
+  const horizontals = [
+    0, profile.horizontal_total_m,
+    ...(profile.cleared || []).map(c => c.distance_along_m),
+    ...cells.map(c => c.horizontal),
+  ];
   const minH = Math.min(...heights) - 0.5;
   const maxH = Math.max(...heights) + 0.5;
   const minX = Math.min(...horizontals) - 0.5;
@@ -2610,6 +2615,53 @@ function drawElevation() {
     elevationCtx.font = '10px ui-monospace, monospace';
     elevationCtx.textAlign = 'center';
     elevationCtx.fillText(crossing.label, x, sy(crossing.top_z_m) - 4);
+  }
+
+  // Walls the path goes over or under: outlined rather than filled, so the ray
+  // is visibly clearing them instead of the section just looking empty.
+  for (const wall of profile.cleared || []) {
+    const x = sx(wall.distance_along_m);
+    const top = sy(wall.top_z_m);
+    const halfWidth = Math.max(SHIELDING_VIEW_WIDTH_M * scale, 4) / 2;
+    elevationCtx.save();
+    elevationCtx.strokeStyle = '#5c6675';
+    elevationCtx.lineWidth = 1.5;
+    elevationCtx.setLineDash([5, 4]);
+    elevationCtx.strokeRect(x - halfWidth, top, halfWidth * 2, sy(wall.base_z_m) - top);
+    elevationCtx.restore();
+    elevationCtx.fillStyle = '#7c869a';
+    elevationCtx.font = 'italic 10px ui-monospace, monospace';
+    elevationCtx.textAlign = 'center';
+    elevationCtx.fillText(`${wall.label} — cleared`, x, top - 4);
+  }
+
+  // A declared barrier has no drawn position. A path between storeys crosses a
+  // floor level at a point that *is* known, and that is where a slab sits, so
+  // they are drawn there and labelled declared -- the app is placing them by
+  // that convention, not from anything surveyed on the drawing.
+  const declared = profile.declared || [];
+  for (const [name, elevationM, horizontalM] of profile.floor_crossings || []) {
+    const x = sx(horizontalM), y = sy(elevationM);
+    elevationCtx.save();
+    elevationCtx.strokeStyle = declared.length ? '#8fa6c4' : '#3a4152';
+    elevationCtx.lineWidth = declared.length ? 6 : 2;
+    elevationCtx.beginPath();
+    elevationCtx.moveTo(x - 34, y);
+    elevationCtx.lineTo(x + 34, y);
+    elevationCtx.stroke();
+    elevationCtx.restore();
+    elevationCtx.textAlign = 'left';
+    if (declared.length) {
+      elevationCtx.fillStyle = '#c7cedb';
+      elevationCtx.font = '10px ui-monospace, monospace';
+      elevationCtx.fillText(declared.map(d =>
+        `${d.label || d.material} — ${d.material} ${d.thickness_mm} mm (declared)`).join('; '),
+        x + 40, y + 3);
+    } else {
+      elevationCtx.fillStyle = '#5c6675';
+      elevationCtx.font = 'italic 9px ui-monospace, monospace';
+      elevationCtx.fillText(`crosses ${name}`, x + 40, y + 3);
+    }
   }
 
   if (cells.length) drawElevationChartGrid(sx, sy, cells);
