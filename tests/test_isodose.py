@@ -434,8 +434,44 @@ def test_elevation_chart_reads_at_the_true_horizontal_distance():
     )
     project.pois.append(poi)
     direction = chart_direction(project, project.source("ct1"), poi, plane="elevation")
-    assert direction.x_m == pytest.approx(4.0)
+    assert abs(direction.x_m) == pytest.approx(4.0)
     assert "4.00 m out from the isocentre" in direction.note
+
+
+def test_elevation_read_is_signed_by_which_end_of_the_table():
+    """A chart whose head and foot ends differ must not be read on the wrong
+    one, so the sign follows the along-table component even though the
+    magnitude is the full horizontal distance."""
+    project = chart_project()
+    source = project.source("ct1")
+
+    # The table runs north (rotation 0), so -y in PDF space is the +table end.
+    toward, away = [], []
+    for pdf_y, bucket in ((-10, toward), (+10, away)):
+        poi = PointOfInterest(
+            id=f"p{pdf_y}", floor_id="f2", x=40, y=pdf_y, auto_height=True,
+            occupancy=1.0, offset_applied=True, linked_source_ids=["ct1"],
+        )
+        project.pois.append(poi)
+        bucket.append(chart_direction(project, source, poi, plane="elevation"))
+
+    assert toward[0].x_m > 0 and away[0].x_m < 0
+    # Mirrored placements are the same distance out, read on opposite ends.
+    assert toward[0].x_m == pytest.approx(-away[0].x_m)
+
+
+def test_elevation_note_states_the_angle_from_the_table_axis():
+    """The angle is what selects the cell, so it is in the audit trail rather
+    than left for a reviewer to re-derive."""
+    project = chart_project()
+    poi = PointOfInterest(
+        id="p1", floor_id="f2", x=0, y=-30, auto_height=True, occupancy=1.0,
+        offset_applied=True, linked_source_ids=["ct1"],
+    )
+    project.pois.append(poi)
+    direction = chart_direction(project, project.source("ct1"), poi, plane="elevation")
+    expected = math.degrees(math.atan2(direction.y_m, direction.x_m))
+    assert f"{expected:.1f}° from the table axis" in direction.note
 
 
 def test_elevation_read_is_on_the_bearing_to_the_point():

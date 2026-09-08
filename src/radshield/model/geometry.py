@@ -611,13 +611,21 @@ def chart_direction(
     anticlockwise from the chart's +x axis.
 
     An ``"elevation"`` chart is a vertical slice through the same 3D scatter
-    field, so a point is traced back into that slice along its own bearing:
-    the chart's x is the point's **true horizontal distance** from the
-    isocentre and its y is the rise.  The cell on that bearing is then what
-    the inverse-square scaling works from.  Note this is the horizontal
-    distance, not the component along the table axis -- a point off to the
-    side is at the same place in the slice as one straight down the table,
-    which is what treating the chart as a rotatable slice means.
+    field, so a point is traced back into that slice along its own bearing --
+    its angle from the table axis -- and the cell on that bearing is what the
+    inverse-square scaling works from.
+
+    Two things about the chart's x are deliberate.  Its *magnitude* is the
+    point's whole horizontal distance from the isocentre, not the component
+    along the table axis: the slice turns to contain the point, so a point off
+    to the side is as far out in the slice as one straight down the table.
+    Taking only the along-table component would discard most of the separation
+    for a point that is mostly lateral, and place it at the wrong angle.  Its
+    *sign* is which end of the table the point lies toward, so a chart whose
+    head and foot ends differ is not read on the wrong one.  A point exactly
+    abeam the isocentre has no end to prefer and is taken as positive.
+
+    ``y`` is the rise: positive above the plane of the table, negative below.
 
     The distance returned is always the true three-dimensional separation,
     since that is what the inverse-square correction must use.
@@ -653,13 +661,17 @@ def chart_direction(
 
     if plane == "elevation":
         # The chart is a vertical slice through the field, turned to contain
-        # the point, so the point sits at its true horizontal distance -- not
-        # at its component along the table axis, which would put a point off
-        # to the side at the wrong place in the slice entirely.
-        chart_x, chart_y = math.hypot(east, north), rise
+        # the point: the whole horizontal separation carries into the slice,
+        # signed by which end of the table the point lies toward.
+        chart_x = math.copysign(math.hypot(east, north), local_y)
+        chart_y = rise
+        # The angle from the table axis is what fixes which cell is read, so
+        # it is stated outright -- it is the one number a reviewer can check
+        # against the room without redoing the trigonometry.
         note = (
-            f"elevation chart: {chart_x:.2f} m out from the isocentre, "
-            f"{chart_y:+.2f} m in height"
+            f"elevation chart: {abs(chart_x):.2f} m out from the isocentre at "
+            f"{math.degrees(math.atan2(chart_y, chart_x)):.1f}° from the table axis "
+            f"({chart_y:+.2f} m in height)"
         )
     else:
         chart_x, chart_y = local_x, local_y
