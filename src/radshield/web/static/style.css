@@ -65,7 +65,7 @@ button, select, input[type=text], input[type=number] {
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.wide { width: 100%; margin-top: 6px; }
-a#btn-csv {
+a#btn-csv, a#btn-report {
   background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 5px; padding: 5px 9px; text-decoration: none;
 }
@@ -176,11 +176,19 @@ details pre { white-space: pre-wrap; color: var(--muted); font-size: 11px; margi
   border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2);
   padding: 6px 7px; margin-bottom: 5px;
 }
+.wall.selected { border-color: var(--accent); background: var(--panel-2); }
 .wall .top { display: flex; align-items: center; gap: 6px; }
-.wall .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.wall .swatch-picker {
+  width: 18px; height: 18px; flex: none; padding: 0; border: 1px solid var(--line);
+  border-radius: 3px; background: none; cursor: pointer;
+}
 .wall .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wall .detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+.wall .detail { color: var(--muted); font-size: 11.5px; margin-top: 3px; display: flex; align-items: center; gap: 8px; }
 .wall button { padding: 2px 7px; }
+.linklike {
+  background: none; border: none; padding: 0; color: var(--accent);
+  font-size: 11.5px; cursor: pointer; text-decoration: underline;
+}
 
 .barrier-list { margin-top: 4px; }
 .barrier {
@@ -204,6 +212,13 @@ dialog textarea {
   border: 1px solid var(--line); border-radius: 5px; padding: 8px;
 }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+#elevation-dialog { width: min(1100px, 94vw); }
+#elevation-canvas-wrap {
+  margin-top: 8px; border: 1px solid var(--line); border-radius: 5px;
+  background: #0b0d11; overflow: hidden;
+}
+#elevation-canvas { display: block; width: 100%; height: 60vh; }
 
 #map-table-wrap { max-height: 340px; overflow: auto; margin-top: 6px; border: 1px solid var(--line); border-radius: 5px; }
 #map-table { border-collapse: collapse; }

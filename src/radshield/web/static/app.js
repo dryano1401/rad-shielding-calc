@@ -26,6 +26,10 @@ const state = {
   resultsCollapsed: false,
   nuclides: null,           // /api/nuclides payload: every registered isotope
   nuclideDefault511: null,  // Archer fit new isotopes prefill from, per material
+  wallOpacity: 0.75,        // view-only: how solid drawn walls render, e.g. for a screenshot
+  shieldingView: false,     // view-only: colour every wall by its thickness, for a report figure
+  elevation: null,          // /api/elevation payload for the dialog's current source/point pair
+  elevationShowGrid: false, // debug overlay of the source's elevation chart grid, in the cross-section
 };
 
 const canvas = document.getElementById('plan');
@@ -68,6 +72,56 @@ const MATERIAL_COLOUR = {
   gypsum: '#e6d2a8', glass: '#7fd4e8', wood: '#c9a06b',
 };
 const materialColour = m => MATERIAL_COLOUR[m] || '#96a0b1';
+
+// Saturated, well-separated hues for the shielding view. Each is drawn over a
+// dark casing, so they stay legible against white paper, black linework and
+// hatched fills alike -- the drawing underneath is not ours to control.
+const SHIELDING_COLOUR = [
+  '#ff2020', '#1f6bff', '#00c853', '#ff00d4',
+  '#ff9100', '#00e5ff', '#ffea00', '#b388ff',
+];
+
+// What a wall is drawn as in the shielding view, regardless of its real
+// thickness -- a lead sheet is far too thin to see at any useful zoom, and
+// here the colour carries the thickness instead of the line width.
+const SHIELDING_VIEW_WIDTH_M = 0.060;
+
+const thicknessKey = mm => mm.toFixed(3);
+
+// Every distinct wall thickness in the project, thickest first, each given its
+// own colour. Built across all floors rather than per floor so one thickness
+// reads the same on every drawing in a report.
+function shieldingColours() {
+  const distinct = new Map();
+  for (const floor of state.project?.floors || []) {
+    for (const wall of floor.walls || []) distinct.set(thicknessKey(wall.thickness_mm), wall.thickness_mm);
+  }
+  const entries = new Map();
+  [...distinct.values()].sort((a, b) => b - a).forEach((mm, index) => {
+    entries.set(thicknessKey(mm), { colour: SHIELDING_COLOUR[index % SHIELDING_COLOUR.length], mm });
+  });
+  return entries;
+}
+
+const INCH_MM = 25.4;
+
+// Lead is specified in fractions of an inch on US drawings, so a thickness
+// landing on a standard fraction is labelled with it alongside the millimetres
+// it is actually stored in. Anything off the fraction grid is left in mm only
+// rather than being rounded into a figure the drawing does not mean.
+function inchFraction(mm) {
+  const steps = Math.round(mm / (INCH_MM / 32));
+  if (steps < 1 || Math.abs(mm - steps * (INCH_MM / 32)) > 0.05) return '';
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const divisor = gcd(steps, 32);
+  const top = steps / divisor, bottom = 32 / divisor;
+  return bottom === 1 ? `${top}"` : `${top}/${bottom}"`;
+}
+
+function thicknessLabel(mm) {
+  const fraction = inchFraction(mm);
+  return `${Number(mm.toFixed(2))} mm${fraction ? ` ≈ ${fraction}` : ''}`;
+}
 
 const displayUnit = () => state.project?.display_unit || 'ft';
 const toMetres = (value, unit) => value * METRES_PER[unit || displayUnit()];
@@ -357,9 +411,52 @@ function draw() {
   drawPoints(floor, 1);
   drawCalibration(floor);
   drawChartGridDebug(floor);
+  drawShieldingLegend();
+}
+
+// Colour only means something with a key beside it, so the shielding view
+// carries its own legend into whatever screenshot is taken of it.
+function drawShieldingLegend() {
+  if (!state.shieldingView) return;
+  const entries = [...shieldingColours().values()];
+  if (!entries.length) return;
+
+  ctx.save();
+  ctx.font = '12px system-ui';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const labels = entries.map(entry => thicknessLabel(entry.mm));
+  const width = Math.max(...labels.map(label => ctx.measureText(label).width)) + 62;
+  const height = entries.length * 21 + 30;
+  ctx.fillStyle = 'rgba(10,12,16,.9)';
+  ctx.strokeStyle = '#3a4152';
+  ctx.lineWidth = 1;
+  ctx.fillRect(12, 12, width, height);
+  ctx.strokeRect(12, 12, width, height);
+
+  ctx.fillStyle = '#e6e9ef';
+  ctx.fillText('Shielding required', 24, 30);
+  ctx.lineCap = 'round';
+  entries.forEach((entry, index) => {
+    const y = 48 + index * 21;
+    for (const [colour, lineWidth] of [['#101319', 11], [entry.colour, 7]]) {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      ctx.moveTo(24, y);
+      ctx.lineTo(52, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#e6e9ef';
+    ctx.fillText(labels[index], 62, y);
+  });
+  ctx.restore();
 }
 
 function drawWalls(floor) {
+  // The shielding view ignores material and per-wall colours on purpose: the
+  // whole point of it is that colour means thickness and nothing else.
+  const shielding = state.shieldingView ? shieldingColours() : null;
   ctx.save();
   ctx.lineCap = 'round';
   for (const wall of floor.walls || []) {
@@ -369,13 +466,64 @@ function drawWalls(floor) {
     const scaled = floor.metres_per_unit
       ? (wall.thickness_mm / 1000) / floor.metres_per_unit * RENDER_ZOOM * state.view.scale
       : 5;
-    ctx.strokeStyle = materialColour(wall.material);
+    const segment = () => {
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    };
+    if (shielding) {
+      // A sheet of lead drawn to its true 1.58 mm is invisible, so in this
+      // view every wall is drawn at the same 60 mm equivalent width. It still
+      // scales with the drawing, so the line stays proportionate on zoom.
+      const width = Math.max(
+        floor.metres_per_unit
+          ? SHIELDING_VIEW_WIDTH_M / floor.metres_per_unit * RENDER_ZOOM * state.view.scale
+          : 6,
+        4,
+      );
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#101319';
+      ctx.lineWidth = width + 4;
+      segment();
+      ctx.strokeStyle = shielding.get(thicknessKey(wall.thickness_mm)).colour;
+      ctx.lineWidth = width;
+      segment();
+      continue;
+    }
+    ctx.strokeStyle = wall.color || materialColour(wall.material);
     ctx.lineWidth = Math.max(scaled, 3);
-    ctx.globalAlpha = 0.75;
+    ctx.globalAlpha = state.wallOpacity;
+    segment();
+  }
+
+  const selected = selectedWall();
+  if (selected && (floor.walls || []).includes(selected)) {
+    const a = toScreen(selected.p1[0], selected.p1[1]);
+    const b = toScreen(selected.p2[0], selected.p2[1]);
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
+    ctx.setLineDash([]);
+    // Square handles, lettered, so the inspector can say which end a typed
+    // length moves without the user having to guess.
+    ctx.font = 'bold 10px system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [end, point] of [['A', a], ['B', b]]) {
+      ctx.fillStyle = '#12151a';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.fillRect(point.x - 6, point.y - 6, 12, 12);
+      ctx.strokeRect(point.x - 6, point.y - 6, 12, 12);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(end, point.x, point.y + 0.5);
+    }
   }
 
   if (state.tool === 'wall' && state.wallPick.length === 1 && state.hover) {
@@ -664,10 +812,40 @@ function label(x, y, text, colour, alpha) {
   ctx.restore();
 }
 
+// Distance from a point to a segment, all in PDF space, plus where along the
+// segment the nearest point falls (0 at p1, 1 at p2).
+function distanceToSegment(pdf, p1, p2) {
+  const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+  const lengthSquared = dx * dx + dy * dy;
+  const along = lengthSquared
+    ? Math.min(Math.max(((pdf.x - p1[0]) * dx + (pdf.y - p1[1]) * dy) / lengthSquared, 0), 1)
+    : 0;
+  return {
+    distance: Math.hypot(pdf.x - (p1[0] + along * dx), pdf.y - (p1[1] + along * dy)),
+    along,
+  };
+}
+
+const selectedWall = () => (state.selection?.kind === 'wall'
+  ? (currentFloor()?.walls || []).find(w => w.id === state.selection.id) || null
+  : null);
+
 function hitTest(pdf) {
   const floor = currentFloor();
   if (!floor) return null;
   const tolerance = 11 / (state.view.scale * RENDER_ZOOM);
+
+  // The selected wall's end handles come first: they are only on screen when
+  // that wall is selected, and grabbing one is always the intended action.
+  const selected = selectedWall();
+  if (selected) {
+    for (const end of ['p1', 'p2']) {
+      if (Math.hypot(selected[end][0] - pdf.x, selected[end][1] - pdf.y) < tolerance) {
+        return { kind: 'wall-end', id: selected.id, end };
+      }
+    }
+  }
+
   const { sources, pois } = pointsOnFloor(floor.id);
   for (const poi of pois) {
     if (Math.hypot(poi.x - pdf.x, poi.y - pdf.y) < tolerance) return { kind: 'poi', id: poi.id };
@@ -675,6 +853,12 @@ function hitTest(pdf) {
   for (const source of sources) {
     if (Math.hypot(source.x - pdf.x, source.y - pdf.y) < tolerance) {
       return { kind: 'source', id: source.id };
+    }
+  }
+  // Walls last, so a marker sitting on one still wins the click.
+  for (const wall of floor.walls || []) {
+    if (distanceToSegment(pdf, wall.p1, wall.p2).distance < tolerance) {
+      return { kind: 'wall', id: wall.id };
     }
   }
   return null;
@@ -688,7 +872,15 @@ canvas.addEventListener('mousedown', event => {
 
   if (state.tool === 'select') {
     const hit = hitTest(pdf);
-    if (hit) {
+    if (hit?.kind === 'wall-end') {
+      state.drag = { ...hit, moved: false };
+    } else if (hit?.kind === 'wall') {
+      // Selecting a wall does not start moving it -- the drag keeps panning,
+      // so the only way to change a wall's geometry is to grab an end handle
+      // deliberately.
+      state.drag = { pan: true, x: event.clientX, y: event.clientY };
+      select(hit);
+    } else if (hit) {
       const item = hit.kind === 'poi'
         ? state.project.pois.find(p => p.id === hit.id)
         : state.project.sources.find(s => s.id === hit.id);
@@ -733,6 +925,18 @@ canvas.addEventListener('mousemove', event => {
   }
 
   const pdf = eventPdf(event);
+  if (state.drag.kind === 'wall-end') {
+    const wall = (currentFloor()?.walls || []).find(w => w.id === state.drag.id);
+    if (!wall) return;
+    wall[state.drag.end] = [pdf.x, pdf.y];
+    state.drag.moved = true;
+    const metres = pdfSegmentMetres(currentFloor(), pointOf(wall.p1), pointOf(wall.p2));
+    setStatus(metres === null
+      ? 'This floor has no scale yet — the wall length cannot be read off it.'
+      : `Wall length: ${formatLength(metres)}`);
+    draw();
+    return;
+  }
   const list = state.drag.kind === 'poi' ? state.project.pois : state.project.sources;
   const item = list.find(i => i.id === state.drag.id);
   item.x = pdf.x + state.drag.dx;
@@ -741,10 +945,28 @@ canvas.addEventListener('mousemove', event => {
   draw();
 });
 
+// Walls store their ends as [x, y] pairs; the segment helpers take {x, y}.
+const pointOf = ([x, y]) => ({ x, y });
+
 window.addEventListener('mouseup', async () => {
   const drag = state.drag;
   state.drag = null;
   if (!drag || drag.pan || !drag.moved) return;
+  if (drag.kind === 'wall-end') {
+    const floor = currentFloor();
+    const wall = (floor?.walls || []).find(w => w.id === drag.id);
+    if (!wall) return;
+    try {
+      setProject(await send(`/api/floors/${floor.id}/walls/${wall.id}`, 'PATCH',
+        { p1: wall.p1, p2: wall.p2 }));
+    } catch (error) {
+      alert(error.message);
+      // The dragged end only lived in the local copy, so reloading the
+      // project puts the wall back where the server still has it.
+      setProject(await api('/api/project'));
+    }
+    return;
+  }
   const list = drag.kind === 'poi' ? state.project.pois : state.project.sources;
   const item = list.find(i => i.id === drag.id);
   const path = drag.kind === 'poi' ? `/api/pois/${drag.id}` : `/api/sources/${drag.id}`;
@@ -901,7 +1123,7 @@ function setTool(tool) {
     button.classList.toggle('active', button.dataset.tool === tool);
   });
   const help = {
-    select: 'Drag a point to move it. Drag the drawing to pan, scroll to zoom.',
+    select: 'Click a wall or point to select it. Drag a point, or a selected wall\'s end handle, to move it. Drag the drawing to pan, scroll to zoom.',
     calibrate: 'Click two points a known distance apart on this drawing.',
     align: 'Click two features that appear on every floor (columns, stair core, lift shaft). Two are needed to fix rotation as well as position.',
     measure: 'Click two points to measure the distance between them, e.g. a wall standoff.',
@@ -967,10 +1189,12 @@ function renderWalls() {
   list.innerHTML = '';
   for (const wall of (floor?.walls || [])) {
     const div = document.createElement('div');
-    div.className = 'wall';
+    div.className = 'wall' + (state.selection?.kind === 'wall' && state.selection.id === wall.id
+      ? ' selected' : '');
     div.innerHTML = `
       <div class="top">
-        <span class="swatch" style="background:${materialColour(wall.material)}"></span>
+        <input type="color" class="swatch-picker" value="${wall.color || materialColour(wall.material)}"
+               data-w="color" title="Wall color -- overrides the material default">
         <input class="name" type="text" value="${escapeHtml(wall.label)}"
                placeholder="unnamed wall" data-w="label">
         <button data-w="delete" title="Delete wall">×</button>
@@ -979,6 +1203,7 @@ function renderWalls() {
         <select data-w="material">${(state.options?.materials || []).map(m =>
           `<option ${wall.material === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
         <span class="reading">${wallThicknessDisplay(wall.thickness_mm)}</span>
+        ${wall.color ? '<button data-w="reset-color" class="linklike" title="Use the material\'s default color">reset color</button>' : ''}
       </div>
       <div class="wall-fields">
         <label>Thickness (${wallUnitLabel()})
@@ -1003,8 +1228,17 @@ function renderWalls() {
     };
     div.querySelector('[data-w=top]').onchange = e =>
       patch({ top_height_m: parseFloat(e.target.value) });
+    div.querySelector('[data-w=color]').onchange = e => patch({ color: e.target.value });
+    const resetColor = div.querySelector('[data-w=reset-color]');
+    if (resetColor) resetColor.onclick = () => patch({ color: '' });
     div.querySelector('[data-w=delete]').onclick = async () =>
       setProject(await api(`/api/floors/${floor.id}/walls/${wall.id}`, { method: 'DELETE' }));
+    // Clicking the row's own background selects the wall on the drawing; the
+    // controls inside it keep their own behaviour.
+    div.onclick = event => {
+      if (event.target.closest('input, select, button')) return;
+      select({ kind: 'wall', id: wall.id });
+    };
     list.appendChild(div);
   }
   if (!floor?.walls?.length) {
@@ -1159,6 +1393,8 @@ function renderPointList() {
   if (!state.project.sources.length && !state.project.pois.length) {
     box.innerHTML = '<p class="hint">Nothing placed yet.</p>';
   }
+  document.getElementById('btn-elevation').disabled =
+    !(state.project.sources.length && state.project.pois.length);
 }
 
 function pointRow(kind, id, name, where) {
@@ -1197,8 +1433,92 @@ function renderInspector() {
     box.innerHTML = '<p class="hint">Place a source or a point of interest, then select it to edit its parameters.</p>';
     return;
   }
-  if (state.selection.kind === 'source') renderSourceInspector(title, box);
+  if (state.selection.kind === 'wall') renderWallInspector(title, box);
+  else if (state.selection.kind === 'source') renderSourceInspector(title, box);
   else renderPoiInspector(title, box);
+}
+
+function renderWallInspector(title, box) {
+  const floor = currentFloor();
+  const wall = selectedWall();
+  if (!wall) {
+    // The selected wall is on another floor, or has been deleted.
+    title.textContent = 'Nothing selected';
+    box.innerHTML = '<p class="hint">That wall is not on the floor being viewed.</p>';
+    return;
+  }
+  title.textContent = wall.label || 'Wall';
+  const metres = pdfSegmentMetres(floor, pointOf(wall.p1), pointOf(wall.p2));
+  const angle = Math.atan2(wall.p2[1] - wall.p1[1], wall.p2[0] - wall.p1[0]) * 180 / Math.PI;
+
+  box.innerHTML = `
+    <div class="field">Label<input type="text" value="${escapeHtml(wall.label)}"
+      placeholder="unnamed wall" data-w="label"></div>
+    <div class="field">Material
+      <select data-w="material">${(state.options?.materials || []).map(m =>
+        `<option ${wall.material === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
+    </div>
+    <div class="field">Thickness (${wallUnitLabel()})
+      <input type="number" step="0.01" min="0"
+             value="${wallThicknessFromMm(wall.thickness_mm).toFixed(2)}" data-w="thickness"></div>
+    <div class="field">Length (${displayUnit()})
+      ${metres === null
+        ? '<span class="reading">floor not calibrated</span>'
+        : `<input type="number" step="0.01" min="0"
+                  value="${fromMetres(metres).toFixed(2)}" data-w="length">`}</div>
+    <p class="hint">Typing a length moves end <strong>B</strong>, keeping the wall's
+      direction and end A where they are. Drag either square handle on the drawing
+      to change the length and the angle together.</p>
+    <div class="row">
+      <label>Base (m)<input type="number" step="0.1" value="${wall.base_height_m}" data-w="base"></label>
+      <label>Top (m)<input type="number" step="0.1" value="${wall.top_height_m}" data-w="top"></label>
+    </div>
+    <div class="field">Color
+      <input type="color" class="swatch-picker" data-w="color"
+             value="${wall.color || materialColour(wall.material)}">
+      ${wall.color ? '<button data-w="reset-color" class="linklike">reset color</button>' : ''}
+    </div>
+    <p class="hint">Bearing on the drawing: ${angle.toFixed(1)}°.
+      ${metres === null ? '' : `Drawn thickness ${wallThicknessDisplay(wall.thickness_mm)}.`}</p>
+    <button data-w="delete" class="wide">Delete wall</button>`;
+
+  const patch = async body => {
+    try { setProject(await send(`/api/floors/${floor.id}/walls/${wall.id}`, 'PATCH', body)); }
+    catch (error) { alert(error.message); renderInspector(); }
+  };
+  box.querySelector('[data-w=label]').onchange = e => patch({ label: e.target.value });
+  box.querySelector('[data-w=material]').onchange = e => patch({ material: e.target.value });
+  box.querySelector('[data-w=thickness]').onchange = e => {
+    const entered = parseFloat(e.target.value);
+    if (!(entered > 0)) { alert('Wall thickness must be greater than zero.'); renderInspector(); return; }
+    patch({ thickness_mm: wallThicknessToMm(entered) });
+  };
+  box.querySelector('[data-w=base]').onchange = e => patch({ base_height_m: parseFloat(e.target.value) });
+  box.querySelector('[data-w=top]').onchange = e => patch({ top_height_m: parseFloat(e.target.value) });
+  box.querySelector('[data-w=color]').onchange = e => patch({ color: e.target.value });
+  const resetColor = box.querySelector('[data-w=reset-color]');
+  if (resetColor) resetColor.onclick = () => patch({ color: '' });
+  box.querySelector('[data-w=delete]').onclick = async () => {
+    setProject(await api(`/api/floors/${floor.id}/walls/${wall.id}`, { method: 'DELETE' }));
+    select(null);
+  };
+
+  const lengthInput = box.querySelector('[data-w=length]');
+  if (lengthInput) {
+    lengthInput.onchange = e => {
+      const wanted = toMetres(parseFloat(e.target.value));
+      if (!(wanted > 0)) { alert('Wall length must be greater than zero.'); renderInspector(); return; }
+      // Scale the existing direction to the requested real length, so the
+      // wall keeps its bearing and only end B moves.
+      const factor = wanted / metres;
+      patch({
+        p2: [
+          wall.p1[0] + (wall.p2[0] - wall.p1[0]) * factor,
+          wall.p1[1] + (wall.p2[1] - wall.p1[1]) * factor,
+        ],
+      });
+    };
+  }
 }
 
 // What the chart assigned to a source quotes its values per.
@@ -1753,6 +2073,16 @@ document.getElementById('obliquity').onchange = async event => {
   setProject(await send('/api/project/obliquity', 'POST', { enabled: event.target.checked }));
   if (state.results) calculate();
 };
+document.getElementById('wall-opacity').oninput = event => {
+  state.wallOpacity = parseFloat(event.target.value);
+  draw();
+};
+document.getElementById('shielding-view').onchange = event => {
+  state.shieldingView = event.target.checked;
+  document.getElementById('wall-opacity').disabled = state.shieldingView;
+  draw();
+  if (elevationDialog.open) drawElevation();
+};
 document.getElementById('btn-calculate').onclick = () => calculate().catch(e => alert(e.message));
 document.getElementById('btn-collapse-results').onclick = () => {
   state.resultsCollapsed = !state.resultsCollapsed;
@@ -2053,6 +2383,278 @@ document.getElementById('map-import').onclick = async event => {
     mapDialog.close();
   } catch (error) { alert(error.message); }
 };
+
+/* ------------------------------------------------------------- elevation */
+
+const elevationCanvas = document.getElementById('elevation-canvas');
+const elevationCtx = elevationCanvas.getContext('2d');
+const elevationDialog = document.getElementById('elevation-dialog');
+
+function elevationOptionLabel(kind, id) {
+  const item = kind === 'source'
+    ? state.project.sources.find(s => s.id === id)
+    : state.project.pois.find(p => p.id === id);
+  if (!item) return '?';
+  const floor = state.project.floors.find(f => f.id === item.floor_id);
+  return `${item.label || (kind === 'source' ? 'source' : 'point')} (${floor?.name || '?'})`;
+}
+
+function populateElevationSelects() {
+  const sourceSelect = document.getElementById('elev-source');
+  const poiSelect = document.getElementById('elev-poi');
+  const keepSource = sourceSelect.value;
+  const keepPoi = poiSelect.value;
+  sourceSelect.innerHTML = state.project.sources
+    .map(s => `<option value="${s.id}">${escapeHtml(elevationOptionLabel('source', s.id))}</option>`)
+    .join('');
+  poiSelect.innerHTML = state.project.pois
+    .map(p => `<option value="${p.id}">${escapeHtml(elevationOptionLabel('poi', p.id))}</option>`)
+    .join('');
+  if ([...sourceSelect.options].some(o => o.value === keepSource)) sourceSelect.value = keepSource;
+  if ([...poiSelect.options].some(o => o.value === keepPoi)) poiSelect.value = keepPoi;
+  // Prefer a linked pair, so the first view shown is a real path rather than
+  // whichever two points happened to sort first.
+  if (!keepPoi && poiSelect.options.length) {
+    const linked = state.project.pois.find(p => p.linked_source_ids.includes(sourceSelect.value));
+    if (linked) poiSelect.value = linked.id;
+  }
+}
+
+async function refreshElevation() {
+  const sourceId = document.getElementById('elev-source').value;
+  const poiId = document.getElementById('elev-poi').value;
+  const status = document.getElementById('elevation-status');
+  const gridToggle = document.getElementById('elev-grid-toggle');
+  if (!sourceId || !poiId) {
+    state.elevation = null;
+    status.textContent = 'Place a source and a point of interest first.';
+    gridToggle.hidden = true;
+    drawElevation();
+    return;
+  }
+  try {
+    state.elevation = await api(`/api/elevation?source_id=${sourceId}&poi_id=${poiId}`);
+    status.textContent = state.elevation.warnings.join(' · ');
+    const source = state.project.sources.find(s => s.id === sourceId);
+    const hasElevationChart = !!(source?.params?.elevation_map_id
+      && (state.project.scatter_maps || []).some(m => m.id === source.params.elevation_map_id));
+    gridToggle.hidden = !hasElevationChart;
+    if (!hasElevationChart) {
+      state.elevationShowGrid = false;
+      document.getElementById('elev-show-grid').checked = false;
+    }
+  } catch (error) {
+    state.elevation = null;
+    status.textContent = error.message;
+  }
+  drawElevation();
+}
+
+function findWallById(wallId) {
+  if (!wallId) return null;
+  for (const floor of state.project.floors) {
+    const wall = (floor.walls || []).find(w => w.id === wallId);
+    if (wall) return wall;
+  }
+  return null;
+}
+
+function drawElevationDot(point, color) {
+  elevationCtx.save();
+  elevationCtx.fillStyle = color || '#e6e9ef';
+  elevationCtx.beginPath();
+  elevationCtx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+  elevationCtx.fill();
+  elevationCtx.restore();
+}
+
+// Overlays a source's elevation-plane scatter chart onto the cross-section,
+// the same way the plan canvas overlays a plan chart's grid values -- each
+// cell placed at its own position in the chart's natural axes (table-axis
+// offset by height), centred on the source.
+//
+// An elevation chart is inherently a 2D slice along the equipment's table
+// axis; it carries no data for how dose varies off that axis. Projecting it
+// onto whichever source-to-point line happens to be chosen would squash it
+// unrecognisably whenever that path isn't along the table axis (most of the
+// time), so instead this draws the chart the way it was published -- as its
+// own side view, sharing the source's horizontal_m = 0 origin with the rest
+// of the cross-section.
+function elevationChartCells() {
+  const profile = state.elevation;
+  const source = state.project.sources.find(s => s.id === document.getElementById('elev-source').value);
+  const chart = (state.project.scatter_maps || [])
+    .find(m => m.id === source?.params?.elevation_map_id);
+  if (!profile || !chart) return [];
+
+  const unitScale = CHART_COORDINATE_UNITS_M[chart.coordinate_unit] ?? 1;
+  const cells = [];
+  for (let row = 0; row < chart.y_coords.length; row++) {
+    for (let col = 0; col < chart.x_coords.length; col++) {
+      cells.push({
+        value: chart.values[row]?.[col],
+        horizontal: chart.x_coords[col] * unitScale * (chart.flip_x ? -1 : 1),
+        height: profile.source.height_m
+          + chart.y_coords[row] * unitScale * (chart.flip_y ? -1 : 1),
+      });
+    }
+  }
+  return cells;
+}
+
+function drawElevationChartGrid(sx, sy, cells) {
+  elevationCtx.save();
+  elevationCtx.font = '10px ui-monospace, monospace';
+  elevationCtx.textAlign = 'center';
+  elevationCtx.textBaseline = 'bottom';
+  for (const cell of cells) {
+    const p = { x: sx(cell.horizontal), y: sy(cell.height) };
+    const text = cell.value == null ? 'NA' : String(cell.value);
+    const width = elevationCtx.measureText(text).width;
+    elevationCtx.fillStyle = 'rgba(10,12,16,.82)';
+    elevationCtx.fillRect(p.x - width / 2 - 2, p.y - 15, width + 4, 13);
+    elevationCtx.fillStyle = cell.value == null ? '#ff6a6a' : '#ffd600';
+    elevationCtx.beginPath();
+    elevationCtx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+    elevationCtx.fill();
+    elevationCtx.fillText(text, p.x, p.y - 3);
+  }
+  elevationCtx.restore();
+}
+
+function drawElevation() {
+  const rect = elevationCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  if (elevationCanvas.width !== rect.width * dpr || elevationCanvas.height !== rect.height * dpr) {
+    elevationCanvas.width = rect.width * dpr;
+    elevationCanvas.height = rect.height * dpr;
+  }
+  elevationCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  elevationCtx.clearRect(0, 0, rect.width, rect.height);
+
+  const profile = state.elevation;
+  if (!profile || !rect.width || !rect.height) return;
+
+  const pad = 56;
+  // The chart, when shown, runs further out than the path itself, so it has
+  // to be fitted alongside it or its outer columns fall off the canvas.
+  const cells = state.elevationShowGrid ? elevationChartCells() : [];
+  const heights = [
+    ...profile.floors.map(([, elevationM]) => elevationM),
+    profile.source.height_m, profile.target.height_m,
+    ...profile.crossings.map(c => c.top_z_m),
+    ...cells.map(c => c.height),
+  ];
+  const horizontals = [0, profile.horizontal_total_m, ...cells.map(c => c.horizontal)];
+  const minH = Math.min(...heights) - 0.5;
+  const maxH = Math.max(...heights) + 0.5;
+  const minX = Math.min(...horizontals) - 0.5;
+  const maxX = Math.max(...horizontals) + 0.5;
+  const scale = Math.min(
+    (rect.width - 2 * pad) / Math.max(maxX - minX, 0.1),
+    (rect.height - 2 * pad) / Math.max(maxH - minH, 0.1),
+  );
+  const sx = x => pad + (x - minX) * scale;
+  const sy = h => rect.height - pad - (h - minH) * scale;
+
+  // Floor levels, as reference lines the walls and ray are drawn against.
+  elevationCtx.save();
+  elevationCtx.strokeStyle = '#3a4152';
+  elevationCtx.fillStyle = '#96a0b1';
+  elevationCtx.font = '11px ui-monospace, monospace';
+  elevationCtx.setLineDash([4, 4]);
+  for (const [name, elevationM] of profile.floors) {
+    const y = sy(elevationM);
+    elevationCtx.beginPath();
+    elevationCtx.moveTo(pad, y);
+    elevationCtx.lineTo(rect.width - pad, y);
+    elevationCtx.stroke();
+    elevationCtx.fillText(`${name} (${formatLength(elevationM)})`, 4, y - 3);
+  }
+  elevationCtx.setLineDash([]);
+  elevationCtx.restore();
+
+  // Walls the path crosses, drawn to scale by height at the point they're met.
+  // The shielding view colours them by thickness here too, so the plan and the
+  // cross-section of the same walls read the same way.
+  const shielding = state.shieldingView ? shieldingColours() : null;
+  for (const crossing of profile.crossings) {
+    const wall = findWallById(crossing.wall_id);
+    const x = sx(crossing.distance_along_m);
+    elevationCtx.save();
+    elevationCtx.lineCap = 'round';
+    if (shielding) {
+      const width = Math.max(SHIELDING_VIEW_WIDTH_M * scale, 4);
+      for (const [colour, lineWidth] of [
+        ['#101319', width + 4],
+        [shielding.get(thicknessKey(crossing.thickness_mm)).colour, width],
+      ]) {
+        elevationCtx.strokeStyle = colour;
+        elevationCtx.lineWidth = lineWidth;
+        elevationCtx.beginPath();
+        elevationCtx.moveTo(x, sy(crossing.base_z_m));
+        elevationCtx.lineTo(x, sy(crossing.top_z_m));
+        elevationCtx.stroke();
+      }
+    } else {
+      elevationCtx.strokeStyle = (wall && wall.color) || materialColour(crossing.material);
+      elevationCtx.globalAlpha = state.wallOpacity;
+      elevationCtx.lineWidth = Math.max((crossing.thickness_mm / 1000) * scale, 3);
+      elevationCtx.beginPath();
+      elevationCtx.moveTo(x, sy(crossing.base_z_m));
+      elevationCtx.lineTo(x, sy(crossing.top_z_m));
+      elevationCtx.stroke();
+    }
+    elevationCtx.restore();
+    elevationCtx.fillStyle = '#c7cedb';
+    elevationCtx.font = '10px ui-monospace, monospace';
+    elevationCtx.textAlign = 'center';
+    elevationCtx.fillText(crossing.label, x, sy(crossing.top_z_m) - 4);
+  }
+
+  if (cells.length) drawElevationChartGrid(sx, sy, cells);
+
+  // The ray itself, and its vertical angle.
+  const p1 = { x: sx(profile.source.horizontal_m), y: sy(profile.source.height_m) };
+  const p2 = { x: sx(profile.target.horizontal_m), y: sy(profile.target.height_m) };
+  elevationCtx.save();
+  elevationCtx.strokeStyle = '#ffd600';
+  elevationCtx.lineWidth = 2;
+  elevationCtx.beginPath();
+  elevationCtx.moveTo(p1.x, p1.y);
+  elevationCtx.lineTo(p2.x, p2.y);
+  elevationCtx.stroke();
+  elevationCtx.restore();
+
+  const style = getComputedStyle(document.documentElement);
+  drawElevationDot(p1, style.getPropertyValue('--source').trim());
+  drawElevationDot(p2, style.getPropertyValue('--poi').trim());
+  elevationCtx.textAlign = 'left';
+  elevationCtx.fillStyle = '#e6e9ef';
+  elevationCtx.font = '11px system-ui';
+  elevationCtx.fillText(profile.source.label, p1.x + 6, p1.y - 6);
+  elevationCtx.fillText(profile.target.label, p2.x + 6, p2.y - 6);
+
+  const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  const angleText =
+    `${profile.vertical_angle_deg >= 0 ? '+' : ''}${profile.vertical_angle_deg.toFixed(1)}° from horizontal`;
+  elevationCtx.fillStyle = '#ffd600';
+  elevationCtx.font = 'bold 11px system-ui';
+  elevationCtx.fillText(angleText, mid.x + 6, mid.y - 10);
+}
+
+document.getElementById('btn-elevation').onclick = () => {
+  populateElevationSelects();
+  elevationDialog.showModal();
+  refreshElevation();
+};
+document.getElementById('elev-source').onchange = refreshElevation;
+document.getElementById('elev-poi').onchange = refreshElevation;
+document.getElementById('elev-show-grid').onchange = event => {
+  state.elevationShowGrid = event.target.checked;
+  drawElevation();
+};
+window.addEventListener('resize', () => { if (elevationDialog.open) drawElevation(); });
 
 document.getElementById('btn-add-floor').onclick = () => document.getElementById('pdf-file').click();
 document.getElementById('pdf-file').onchange = async event => {

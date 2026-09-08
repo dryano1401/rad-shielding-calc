@@ -51,6 +51,10 @@ def test_wall_rejects_impossible_geometry():
         Wall(id="w", p1=(0, 0), p2=(10, 0), thickness_mm=0)
     with pytest.raises(ValueError, match="must be above its base"):
         Wall(id="w", p1=(0, 0), p2=(10, 0), base_height_m=3.0, top_height_m=2.0)
+    # The intersection test skips a zero-length wall, so one would sit on the
+    # drawing looking like a barrier while shielding nothing.
+    with pytest.raises(ValueError, match="two distinct ends"):
+        Wall(id="w", p1=(4, 7), p2=(4, 7))
 
 
 def test_path_crossing_a_wall_is_detected():
@@ -387,6 +391,35 @@ def test_projects_saved_before_walls_existed_still_load():
     restored = Project.from_dict(data)
     assert restored.floor("fl1").walls == []
     assert restored.apply_obliquity is False
+
+
+def test_wall_color_defaults_empty_and_is_a_display_only_override():
+    """An unset color falls back to the material's default at render time
+    (a frontend concern); the model just carries whatever string is given,
+    with no effect on the attenuation calculation."""
+    wall = add_wall(build_project(), "fl1")
+    assert wall.color == ""
+    coloured = add_wall(build_project(), "fl1", id="w2", color="#ff0000")
+    assert coloured.color == "#ff0000"
+
+
+def test_wall_color_survives_a_save_and_reload(tmp_path):
+    project = build_project()
+    add_wall(project, "fl1", label="North wall", color="#ff0000")
+    path = save(project, tmp_path / "p.rsproj", {"plan.pdf": b"%PDF-1.4 fake"})
+    reloaded, _ = load(path)
+    assert reloaded.floor("fl1").walls[0].color == "#ff0000"
+
+
+def test_walls_saved_before_color_existed_still_load():
+    project = build_project()
+    add_wall(project, "fl1")
+    data = project.to_dict()
+    for floor in data["floors"]:
+        for wall in floor["walls"]:
+            wall.pop("color")
+    restored = Project.from_dict(data)
+    assert restored.floor("fl1").walls[0].color == ""
 
 
 def test_absurd_thickness_is_rejected_as_a_units_slip():

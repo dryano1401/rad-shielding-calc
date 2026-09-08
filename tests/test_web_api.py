@@ -213,6 +213,20 @@ def test_full_workflow_produces_results_and_csv(client):
     # 117 uSv/week against the 20 uSv/week uncontrolled goal, bare -- 100/B.
     assert float(row["pct_of_goal"]) == pytest.approx(100.0 / 0.17, rel=0.02)
 
+    report_response = client.get("/api/report.docx")
+    assert report_response.status_code == 200
+    assert report_response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    docx = pytest.importorskip("docx")
+    document = docx.Document(io.BytesIO(report_response.content))
+    text = "\n".join(p.text for p in document.paragraphs)
+    for table in document.tables:
+        for row_cells in table.rows:
+            text += "\n" + "\n".join(c.text for c in row_cells.cells)
+    assert "Office above" in text
+    assert "117" in text
+
 
 def test_dragging_a_point_persists_new_coordinates(client):
     project = add_floor(client, "Level 1", 0.0)
@@ -369,6 +383,23 @@ def two_floor_setup(client):
     return project["pois"][0]["id"], source_id
 
 
+def test_elevation_endpoint_profiles_the_path(client):
+    poi_id, source_id = two_floor_setup(client)
+    response = client.get("/api/elevation", params={"source_id": source_id, "poi_id": poi_id})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["horizontal_total_m"] == pytest.approx(0.0)
+    assert payload["vertical_angle_deg"] == pytest.approx(90.0)
+    assert payload["source"]["height_m"] == pytest.approx(1.0)
+    assert payload["target"]["height_m"] == pytest.approx(4.3 + 0.5)  # TG-108 Fig. 5 auto height
+    assert [name for name, _ in payload["floors"]] == ["Source floor", "Floor above"]
+
+
+def test_elevation_endpoint_rejects_unknown_ids(client):
+    response = client.get("/api/elevation", params={"source_id": "nope", "poi_id": "nope"})
+    assert response.status_code == 404
+
+
 def test_distances_endpoint_exposes_components(client):
     poi_id, source_id = two_floor_setup(client)
     payload = client.get("/api/distances").json()
@@ -494,12 +525,56 @@ def test_wall_crud(client):
     assert project["floors"][0]["walls"] == []
 
 
+def test_wall_color_can_be_set_and_reset(client):
+    floor_id, _, _ = wall_scenario(client)
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete",
+        "thickness_mm": 200, "top_height_m": 3.0, "label": "Corridor wall",
+        "color": "#ff0000",
+    }).json()
+    wall = project["floors"][0]["walls"][0]
+    assert wall["color"] == "#ff0000"
+
+    # A wall drawn without a color falls back to "" (material default at render time).
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [10, -50], "p2": [10, 50], "material": "concrete",
+    }).json()
+    assert project["floors"][0]["walls"][1]["color"] == ""
+
+    project = client.patch(f"/api/floors/{floor_id}/walls/{wall['id']}",
+                           json={"color": ""}).json()
+    assert project["floors"][0]["walls"][0]["color"] == ""
+
+
 def test_wall_validation_is_enforced(client):
     floor_id, _, _ = wall_scenario(client)
     assert client.post(f"/api/floors/{floor_id}/walls", json={
         "p1": [0, 0], "p2": [10, 0], "thickness_mm": 0}).status_code == 400
     assert client.post(f"/api/floors/{floor_id}/walls", json={
         "p1": [0, 0], "p2": [10, 0], "base_height_m": 3, "top_height_m": 1}).status_code == 400
+    assert client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [5, 5], "p2": [5, 5]}).status_code == 400
+
+
+def test_wall_ends_can_be_moved_to_change_its_length(client):
+    """Dragging an end handle on the drawing patches the wall's coordinates."""
+    floor_id, _, _ = wall_scenario(client)
+    project = client.post(f"/api/floors/{floor_id}/walls", json={
+        "p1": [0, -50], "p2": [0, 50], "material": "concrete", "thickness_mm": 200,
+    }).json()
+    wall_id = project["floors"][0]["walls"][0]["id"]
+
+    project = client.patch(f"/api/floors/{floor_id}/walls/{wall_id}",
+                           json={"p2": [0, 25]}).json()
+    wall = project["floors"][0]["walls"][0]
+    assert wall["p2"] == [0, 25]
+    assert wall["p1"] == [0, -50]        # the end that was not dragged stays put
+    assert wall["thickness_mm"] == 200   # and nothing else is disturbed
+
+    # Collapsing a wall onto a point would leave it drawn but shielding
+    # nothing, so it is refused rather than silently accepted.
+    assert client.patch(f"/api/floors/{floor_id}/walls/{wall_id}",
+                        json={"p2": [0, -50]}).status_code == 400
 
 
 def test_drawn_wall_attenuates_the_dose_and_shows_in_results(client):

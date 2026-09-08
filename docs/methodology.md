@@ -290,6 +290,26 @@ elevation chart when one is assigned, since that is the view describing what
 leaves the gantry vertically. Falling back to the plan chart is allowed but
 noted, because the plan view does not represent the vertical separation.
 
+Both charts are slices through the same three-dimensional field, so the
+elevation chart is treated as a vertical slice turned to contain the point.
+The point is traced back into that slice along its **angle from the table
+axis**, and the cell on that bearing is what the inverse-square scaling works
+from.
+
+Two properties of the horizontal coordinate follow, and both matter. Its
+magnitude is the point's whole horizontal distance from the isocentre, not the
+component along the table axis: taking only the component would place a point
+off to the side of the scanner somewhere else in the slice entirely, and for a
+point that is mostly lateral it discards the larger part of the separation.
+Its sign is which end of the table the point lies toward, so a chart whose head
+and foot ends differ -- and real ones differ substantially at height -- is not
+read on the wrong end. A point exactly abeam the isocentre has no end to prefer
+and is taken as positive.
+
+The angle is written into the audit trail alongside the distance, because it is
+the one number that can be checked against the room without redoing the
+trigonometry, and it is what makes a wrong `flip_x` on the chart visible.
+
 **Left/right and front/back are not universal.** Rotation places the chart's
 axes on the drawing, but it cannot say which side of the printed grid is
 which -- a vendor may print column offsets increasing toward either side of

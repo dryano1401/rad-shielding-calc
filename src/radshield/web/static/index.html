@@ -117,6 +117,12 @@
       <label class="ghost-toggle"><input id="ghost" type="checkbox"> Show other floors</label>
       <label class="ghost-toggle" title="Scale barrier thickness by 1/cos(angle) for paths crossing at an angle">
         <input id="obliquity" type="checkbox"> Obliquity</label>
+      <label class="ghost-toggle" title="How solid drawn walls render -- turn this up for a clear screenshot showing where lead should go">
+        Wall opacity
+        <input id="wall-opacity" type="range" min="0.2" max="1" step="0.05" value="0.75">
+      </label>
+      <label class="ghost-toggle" title="Display only: colour every wall by its thickness and draw it heavy enough to see, with a key -- the figure a report needs to show which lead goes where">
+        <input id="shielding-view" type="checkbox"> Shielding colors</label>
     </div>
     <div id="canvas-wrap">
       <canvas id="plan"></canvas>
@@ -132,6 +138,7 @@
     <section>
       <h2>Placed points</h2>
       <div id="point-list"></div>
+      <button id="btn-elevation" class="wide" disabled>View elevation…</button>
     </section>
   </aside>
 </main>
@@ -141,6 +148,7 @@
     <h2>Results</h2>
     <button id="btn-calculate">Calculate</button>
     <a id="btn-csv" href="/api/results.csv">Export CSV</a>
+    <a id="btn-report" href="/api/report.docx" title="Word report: auto-filled tables, placeholder narrative sections">Generate report</a>
     <span id="results-note" class="hint"></span>
     <span class="spacer"></span>
     <button id="btn-collapse-results" title="Minimize results">Minimize ▾</button>
@@ -259,6 +267,31 @@
       </div>
     </div>
 
+    <div class="dialog-actions">
+      <button value="close">Close</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="elevation-dialog">
+  <form method="dialog">
+    <h2>Elevation view</h2>
+    <p class="hint">A side view along a straight line from one source to one point: the
+      floors it passes through, the walls it crosses drawn to scale by height, the ray
+      itself, and its vertical angle.</p>
+    <div class="row">
+      <label>Source
+        <select id="elev-source"></select>
+      </label>
+      <label>Point
+        <select id="elev-poi"></select>
+      </label>
+      <label class="ghost-toggle" id="elev-grid-toggle" hidden>
+        <input id="elev-show-grid" type="checkbox"> Show elevation chart grid
+      </label>
+    </div>
+    <div id="elevation-canvas-wrap"><canvas id="elevation-canvas"></canvas></div>
+    <div id="elevation-status" class="hint"></div>
     <div class="dialog-actions">
       <button value="close">Close</button>
     </div>

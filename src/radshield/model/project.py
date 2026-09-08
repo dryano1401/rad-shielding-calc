@@ -238,6 +238,10 @@ class Wall:
         base_height_m: Bottom of the wall above its floor.
         top_height_m: Top of the wall above its floor.
         label: Free text for the audit trail.
+        color: Display override for the drawn wall, as a CSS color string
+            (e.g. ``"#ff0000"``).  Empty string means "use the material's
+            default color" -- this is purely a display choice and never
+            affects the calculation.
     """
 
     id: str
@@ -248,8 +252,14 @@ class Wall:
     base_height_m: float = 0.0
     top_height_m: float = 3.0
     label: str = ""
+    color: str = ""
 
     def __post_init__(self) -> None:
+        if (self.p1[0] - self.p2[0]) ** 2 + (self.p1[1] - self.p2[1]) ** 2 < 1e-12:
+            # A zero-length wall is not merely useless: the path intersection
+            # test skips it, so it would sit on the drawing looking like a
+            # barrier while shielding nothing.
+            raise ValueError("a wall must have two distinct ends; it has no length")
         if self.thickness_mm <= 0:
             raise ValueError(f"wall thickness must be positive, got {self.thickness_mm}")
         if self.thickness_mm > MAX_WALL_THICKNESS_MM:
@@ -539,6 +549,7 @@ class Project:
                     base_height_m=w.get("base_height_m", 0.0),
                     top_height_m=w.get("top_height_m", 3.0),
                     label=w.get("label", ""),
+                    color=w.get("color", ""),
                 )
                 for w in raw.get("walls", [])
             ]

@@ -7,6 +7,8 @@ reads an order of magnitude below its neighbours.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from radshield.engine.evaluate import evaluate_point
@@ -415,6 +417,95 @@ def test_elevation_chart_is_preferred_across_floors():
     notes = evaluate_point(project, poi).contributions[0].notes
     assert any("elevation view" in n for n in notes)
     assert not any("no elevation chart" in n for n in notes)
+
+
+def test_elevation_chart_reads_at_the_true_horizontal_distance():
+    """The elevation chart is a slice through the field, turned to contain the
+    point, so the point sits at its real horizontal distance in that slice.
+
+    Reading it at the component along the table axis instead puts a point off
+    to the side of the scanner at the wrong place entirely -- here, a point 4 m
+    due east of a table that runs north would land on the isocentre column.
+    """
+    project = chart_project()
+    poi = PointOfInterest(
+        id="p1", floor_id="f2", x=40, y=0, auto_height=True, occupancy=1.0,
+        offset_applied=True, linked_source_ids=["ct1"],
+    )
+    project.pois.append(poi)
+    direction = chart_direction(project, project.source("ct1"), poi, plane="elevation")
+    assert abs(direction.x_m) == pytest.approx(4.0)
+    assert "4.00 m out from the isocentre" in direction.note
+
+
+def test_elevation_read_is_signed_by_which_end_of_the_table():
+    """A chart whose head and foot ends differ must not be read on the wrong
+    one, so the sign follows the along-table component even though the
+    magnitude is the full horizontal distance."""
+    project = chart_project()
+    source = project.source("ct1")
+
+    # The table runs north (rotation 0), so -y in PDF space is the +table end.
+    toward, away = [], []
+    for pdf_y, bucket in ((-10, toward), (+10, away)):
+        poi = PointOfInterest(
+            id=f"p{pdf_y}", floor_id="f2", x=40, y=pdf_y, auto_height=True,
+            occupancy=1.0, offset_applied=True, linked_source_ids=["ct1"],
+        )
+        project.pois.append(poi)
+        bucket.append(chart_direction(project, source, poi, plane="elevation"))
+
+    assert toward[0].x_m > 0 and away[0].x_m < 0
+    # Mirrored placements are the same distance out, read on opposite ends.
+    assert toward[0].x_m == pytest.approx(-away[0].x_m)
+
+
+def test_elevation_note_states_the_angle_from_the_table_axis():
+    """The angle is what selects the cell, so it is in the audit trail rather
+    than left for a reviewer to re-derive."""
+    project = chart_project()
+    poi = PointOfInterest(
+        id="p1", floor_id="f2", x=0, y=-30, auto_height=True, occupancy=1.0,
+        offset_applied=True, linked_source_ids=["ct1"],
+    )
+    project.pois.append(poi)
+    direction = chart_direction(project, project.source("ct1"), poi, plane="elevation")
+    expected = math.degrees(math.atan2(direction.y_m, direction.x_m))
+    assert f"{expected:.1f}° from the table axis" in direction.note
+
+
+def test_elevation_read_is_on_the_bearing_to_the_point():
+    """The cell used is the one on the same bearing, which is what the
+    inverse-square scaling is then applied from."""
+    project = chart_project()
+    project.scatter_maps.append(
+        ScatterMapData(id="m2", name="Vendor elevation view", plane="elevation",
+                       coordinate_unit="m", value_unit="mGy",
+                       x_coords=[0.0, 1.0, 2.0], y_coords=[2.0, 1.0, 0.0],
+                       values=[[0.001, 0.002, 0.003],
+                               [0.004, 0.005, 0.006],
+                               [0.007, 0.008, 0.009]])
+    )
+    project.source("ct1").params["elevation_map_id"] = "m2"
+    poi = PointOfInterest(
+        id="p1", floor_id="f2", x=40, y=0, auto_height=True, occupancy=1.0,
+        offset_applied=True, linked_source_ids=["ct1"],
+    )
+    project.pois.append(poi)
+    source = project.source("ct1")
+    direction = chart_direction(project, source, poi, plane="elevation")
+    sample = isodose.sample_at(
+        isodose.build_map("m2", "elevation", [0.0, 1.0, 2.0], [2.0, 1.0, 0.0],
+                          [[0.001, 0.002, 0.003], [0.004, 0.005, 0.006],
+                           [0.007, 0.008, 0.009]], coordinate_unit="m"),
+        direction.x_m, direction.y_m,
+    )
+    # 4 m out, 3.5 m up: beyond the chart, so a cell on that bearing is scaled.
+    assert direction.x_m == pytest.approx(4.0)
+    assert sample.method == "extrapolated"
+    bearing = math.degrees(math.atan2(direction.y_m, direction.x_m))
+    cell_bearing = math.degrees(math.atan2(sample.cell.y_m, sample.cell.x_m))
+    assert abs(bearing - cell_bearing) < 15.0
 
 
 def test_charts_survive_a_save_and_reload(tmp_path):

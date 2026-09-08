@@ -26,8 +26,10 @@ from ..engine.evaluate import (
     results_to_rows,
 )
 from ..model.geometry import (
+    GeometryError,
     alignment_span_m,
     check_project,
+    elevation_profile,
     format_length,
     measurement_length,
 )
@@ -50,7 +52,7 @@ from ..physics import nuclides
 from ..physics import isodose
 from ..physics.archer import ArcherError, ArcherParams
 from ..physics.ncrp147 import tables as ncrp_tables
-from . import render
+from . import render, report
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -431,6 +433,7 @@ def add_wall(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
             base_height_m=float(payload.get("base_height_m", 0.0)),
             top_height_m=float(payload.get("top_height_m", 3.0)),
             label=payload.get("label", ""),
+            color=payload.get("color", ""),
         )
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -440,7 +443,7 @@ def add_wall(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.patch("/api/floors/{floor_id}/walls/{wall_id}")
 def update_wall(floor_id: str, wall_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Change a wall's material, thickness, height or label."""
+    """Change a wall's ends, material, thickness, height, label or display color."""
     try:
         floor = session.project.floor(floor_id)
     except KeyError as exc:
@@ -455,10 +458,15 @@ def update_wall(floor_id: str, wall_id: str, payload: dict[str, Any]) -> dict[st
         "base_height_m": float(payload.get("base_height_m", wall.base_height_m)),
         "top_height_m": float(payload.get("top_height_m", wall.top_height_m)),
         "label": payload.get("label", wall.label),
+        "color": payload.get("color", wall.color),
     }
     try:
-        replacement = Wall(id=wall.id, p1=wall.p1, p2=wall.p2, **updated)
-    except ValueError as exc:
+        ends = {
+            key: tuple(payload[key]) if key in payload else getattr(wall, key)
+            for key in ("p1", "p2")
+        }
+        replacement = Wall(id=wall.id, **ends, **updated)
+    except (ValueError, TypeError) as exc:
         raise HTTPException(400, str(exc)) from exc
     floor.walls[floor.walls.index(wall)] = replacement
     return _project_payload()
@@ -773,6 +781,40 @@ def results_csv() -> Response:
         buffer.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="shielding_results.csv"'},
+    )
+
+
+@app.get("/api/elevation")
+def elevation_view(source_id: str, poi_id: str) -> dict[str, Any]:
+    """Vertical cross-section along one source-to-point path.
+
+    Floors stacked by elevation, the walls that path crosses drawn to scale
+    by height, the ray itself and its vertical angle -- the side-view
+    counterpart to the plan canvas.
+    """
+    try:
+        source = session.project.source(source_id)
+        poi = session.project.poi(poi_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    try:
+        profile = elevation_profile(
+            session.project, source, poi, apply_obliquity=session.project.apply_obliquity,
+        )
+    except GeometryError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return asdict(profile)
+
+
+@app.get("/api/report.docx")
+def report_docx() -> Response:
+    """Generate a Word report: auto-filled data tables, placeholder narrative."""
+    computed = evaluate_project(session.project)
+    content = report.build_report(session.project, computed)
+    return Response(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="shielding_report.docx"'},
     )
 
 
