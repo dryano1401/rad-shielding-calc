@@ -608,10 +608,16 @@ def chart_direction(
     the chart's axes to match how the equipment sits on the plan.
 
     For a ``"plan"`` chart the bearing is measured in the horizontal plane,
-    anticlockwise from the chart's +x axis.  For an ``"elevation"`` chart the
-    chart's x axis is the table axis and its y axis is height, so the bearing
-    is the angle above or below the isocentre plane, measured in the vertical
-    plane that contains the table axis.
+    anticlockwise from the chart's +x axis.
+
+    An ``"elevation"`` chart is a vertical slice through the same 3D scatter
+    field, so a point is traced back into that slice along its own bearing:
+    the chart's x is the point's **true horizontal distance** from the
+    isocentre and its y is the rise.  The cell on that bearing is then what
+    the inverse-square scaling works from.  Note this is the horizontal
+    distance, not the component along the table axis -- a point off to the
+    side is at the same place in the slice as one straight down the table,
+    which is what treating the chart as a rotatable slice means.
 
     The distance returned is always the true three-dimensional separation,
     since that is what the inverse-square correction must use.
@@ -646,11 +652,13 @@ def chart_direction(
         )
 
     if plane == "elevation":
-        # The elevation chart runs along the table axis, which is the plan
-        # chart's +y, so that component becomes the chart's horizontal axis.
-        chart_x, chart_y = local_y, rise
+        # The chart is a vertical slice through the field, turned to contain
+        # the point, so the point sits at its true horizontal distance -- not
+        # at its component along the table axis, which would put a point off
+        # to the side at the wrong place in the slice entirely.
+        chart_x, chart_y = math.hypot(east, north), rise
         note = (
-            f"elevation chart: {chart_x:+.2f} m along the table axis, "
+            f"elevation chart: {chart_x:.2f} m out from the isocentre, "
             f"{chart_y:+.2f} m in height"
         )
     else:

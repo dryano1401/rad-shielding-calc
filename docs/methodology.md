@@ -290,6 +290,21 @@ elevation chart when one is assigned, since that is the view describing what
 leaves the gantry vertically. Falling back to the plan chart is allowed but
 noted, because the plan view does not represent the vertical separation.
 
+Both charts are slices through the same three-dimensional field, so the
+elevation chart is treated as a vertical slice turned to contain the point:
+its horizontal coordinate is the point's **true horizontal distance** from the
+isocentre, and the cell on the resulting bearing is what the inverse-square
+scaling works from. It is deliberately not the component along the table axis
+-- that would place a point off to the side of the scanner somewhere else in
+the slice entirely, and for a point mostly lateral it discards the larger part
+of the separation.
+
+One consequence is worth stating plainly: a horizontal distance is unsigned,
+so the read always lands on the positive side of the elevation grid, and a
+chart whose two sides differ at height will never have its negative side used
+across floors. Where that asymmetry is real, check the sign convention of the
+chart as pasted (`flip_x`) against the room before relying on the result.
+
 **Left/right and front/back are not universal.** Rotation places the chart's
 axes on the drawing, but it cannot say which side of the printed grid is
 which -- a vendor may print column offsets increasing toward either side of
