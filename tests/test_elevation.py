@@ -52,11 +52,47 @@ def test_a_wall_the_path_climbs_over_is_reported_as_cleared_not_crossed():
     profile = elevation_profile(project, source, poi)
 
     assert profile.crossings == []          # nothing shields the path
-    assert len(profile.cleared) == 1        # but the wall is still drawn
-    cleared = profile.cleared[0]
-    assert cleared.cleared is True
+    assert len(profile.section) == 1        # but the wall is still drawn
+    cleared = profile.section[0]
+    assert cleared.relation == "cleared"
     assert cleared.effective_thickness_mm == 0.0
     assert cleared.hit_height_m > cleared.top_z_m
+
+
+def test_a_wall_past_the_point_is_still_drawn_in_the_section():
+    """A section cuts the whole building along the line, so a wall the path
+    stops short of is drawn where it sits -- that is what makes the drawing
+    usable as a geometry check rather than only as a barrier list."""
+    project = build_project()
+    # Wall at x = 0 (0 m), but the path runs from -4 m only to -2 m.
+    add_wall(project, "fl1", p1=(0.0, -50.0), p2=(0.0, 50.0))
+    source = uptake_source(floor_id="fl1", x=-40.0, y=0.0)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl1", x=-20.0, y=0.0, auto_height=False,
+        height_above_floor_m=1.0, linked_source_ids=["src1"],
+    )
+    project.pois.append(poi)
+    profile = elevation_profile(project, source, poi)
+
+    assert profile.crossings == []                       # the path never reaches it
+    assert [c.relation for c in profile.section] == ["beyond"]
+    # It is drawn at its real distance along the line, past the point's 2 m.
+    assert profile.section[0].distance_along_m == pytest.approx(4.0)
+    assert profile.horizontal_total_m == pytest.approx(2.0)
+
+
+def test_a_wall_behind_the_source_is_placed_at_a_negative_distance():
+    project = build_project()
+    add_wall(project, "fl1", p1=(-60.0, -50.0), p2=(-60.0, 50.0))
+    source = uptake_source(floor_id="fl1", x=-40.0, y=0.0)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl1", x=40.0, y=0.0, auto_height=False,
+        height_above_floor_m=1.0, linked_source_ids=["src1"],
+    )
+    project.pois.append(poi)
+    profile = elevation_profile(project, source, poi)
+    assert [c.relation for c in profile.section] == ["beyond"]
+    assert profile.section[0].distance_along_m == pytest.approx(-2.0)
 
 
 def test_a_cleared_wall_is_never_a_barrier():

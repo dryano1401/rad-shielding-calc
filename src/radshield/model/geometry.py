@@ -333,10 +333,16 @@ class Crossing:
     hit_height_m: float | None = None
     base_z_m: float | None = None
     top_z_m: float | None = None
-    # True for a wall the path passes clear over or under. It shields nothing
-    # and never reaches the physics; it exists so a cross-section can show
-    # the ray going past a wall rather than silently omitting it.
-    cleared: bool = False
+    # How the path relates to this wall.  ``"through"`` is the only one that
+    # shields anything and the only one the physics ever sees; the others
+    # exist so a cross-section can draw a wall the ray misses rather than
+    # silently omitting it, which reads as a fault rather than as geometry.
+    #
+    #   "through"  the path passes through the wall -- a real barrier
+    #   "cleared"  it crosses the wall in plan but above or below it
+    #   "beyond"   the cut plane crosses the wall, but outside the path's
+    #              own extent: past the point, or behind the source
+    relation: str = "through"
 
     @property
     def is_oblique(self) -> bool:
@@ -355,6 +361,7 @@ def world_point(project: Project, floor: Floor, x: float, y: float, height_m: fl
 class _WallHit:
     """Where a path meets a wall's plane, before the height band is tested."""
 
+    t: float
     hit_z: float
     base_z: float
     top_z: float
@@ -368,6 +375,8 @@ def _wall_plane_hit(
     wall: Wall,
     start: tuple[float, float, float],
     end: tuple[float, float, float],
+    *,
+    bounded: bool = True,
 ) -> _WallHit | None:
     """Where the segment meets the wall's vertical plane, within its plan extent.
 
@@ -375,6 +384,12 @@ def _wall_plane_hit(
     separate from the height band is what lets one caller ask "does this go
     through the wall" and another ask "does it pass clear over it", off the
     same arithmetic rather than two copies that could drift apart.
+
+    Args:
+        bounded: Restrict the hit to the segment itself.  False extends the
+            path to the infinite line through it, which is what a drawn
+            section wants -- an architectural section cuts the whole building
+            along a line, not just the stretch between two markers.
     """
     ax, ay, _ = world_point(project, floor, wall.p1[0], wall.p1[1], 0.0)
     bx, by, _ = world_point(project, floor, wall.p2[0], wall.p2[1], 0.0)
@@ -397,7 +412,7 @@ def _wall_plane_hit(
         return None
 
     t = ((ax - start[0]) * nx + (ay - start[1]) * ny) / denominator
-    if not 0.0 <= t <= 1.0:
+    if bounded and not 0.0 <= t <= 1.0:
         return None
 
     hit_x = start[0] + t * dx
@@ -410,6 +425,7 @@ def _wall_plane_hit(
 
     path_length = math.sqrt(dx * dx + dy * dy + dz * dz)
     return _WallHit(
+        t=t,
         hit_z=start[2] + t * dz,
         base_z=floor.elevation_m + wall.base_height_m,
         top_z=floor.elevation_m + wall.top_height_m,
@@ -474,26 +490,35 @@ def wall_crossing(
     )
 
 
-def wall_clearance(
+def wall_in_section(
     project: Project,
     floor: Floor,
     wall: Wall,
     start: tuple[float, float, float],
     end: tuple[float, float, float],
 ) -> Crossing | None:
-    """Return the wall if the path passes clear over or under it.
+    """Return a wall the cut plane crosses but the path does not go through.
 
-    The counterpart to :func:`wall_crossing`: same plan intersection, but
-    returned only when the height band is *missed*.  Such a wall shields
-    nothing and must never reach the physics, but it is exactly what a
-    cross-section needs in order to show why -- a path climbing to the storey
-    above clears a 2.1 m partition within a metre of the source, and a
-    drawing that simply omitted the wall would look like an error rather than
-    like a ray going over it.
+    The counterpart to :func:`wall_crossing`, off the same plan intersection.
+    An architectural section cuts the whole building along a line and draws
+    every wall on it, not only the stretch between two markers, so the path is
+    extended to its infinite line here.  What comes back is never a barrier --
+    it is what lets the section be checked as geometry: a wall the ray goes
+    over is drawn with the ray skimming it, and a wall past the point is drawn
+    where the ray stopped short of it.  Both would otherwise be absent, and an
+    empty section reads as a fault rather than as a ray missing everything.
+
+    Returns:
+        The wall with its ``relation`` set to ``"cleared"`` or ``"beyond"``,
+        or None when the cut misses the wall or the path goes through it (in
+        which case :func:`wall_crossing` is what reports it).
     """
-    hit = _wall_plane_hit(project, floor, wall, start, end)
-    if hit is None or hit.base_z <= hit.hit_z <= hit.top_z:
+    hit = _wall_plane_hit(project, floor, wall, start, end, bounded=False)
+    if hit is None:
         return None
+    within_path = 0.0 <= hit.t <= 1.0
+    if within_path and hit.base_z <= hit.hit_z <= hit.top_z:
+        return None  # a real crossing; wall_crossing owns it
     return Crossing(
         material=wall.material,
         thickness_mm=wall.thickness_mm,
@@ -505,7 +530,7 @@ def wall_clearance(
         hit_height_m=hit.hit_z,
         base_z_m=hit.base_z,
         top_z_m=hit.top_z,
-        cleared=True,
+        relation="cleared" if within_path else "beyond",
     )
 
 
@@ -592,7 +617,7 @@ class ElevationProfile:
     vertical_angle_deg: float
     floors: list[tuple[str, float]]
     crossings: list[Crossing]
-    cleared: list[Crossing] = field(default_factory=list)
+    section: list[Crossing] = field(default_factory=list)
     declared: list[Crossing] = field(default_factory=list)
     floor_crossings: list[tuple[str, float, float]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -643,20 +668,22 @@ def elevation_profile(
     # there is nothing in the way when there is.
     declared = [c for c in crossings if c.wall_id is None]
 
-    # Walls the path goes over or under. Not barriers -- shown so the section
-    # explains itself when a climbing path meets nothing.
+    # Every other wall the cut plane crosses: gone over, gone under, or simply
+    # further along the line than the path reaches.  None of them shield
+    # anything; they are what makes the drawing checkable as geometry.
     poi_height, _ = target_height(source_floor, poi_floor, poi)
     ray_start = world_point(project, source_floor, source.x, source.y,
                             source.height_above_floor_m)
     ray_end = world_point(project, poi_floor, poi.x, poi.y, poi_height)
-    cleared: list[Crossing] = []
+    section: list[Crossing] = []
     for floor in project.floors:
         if floor.calibration is None:
             continue
         for wall in floor.walls:
-            missed = wall_clearance(project, floor, wall, ray_start, ray_end)
+            missed = wall_in_section(project, floor, wall, ray_start, ray_end)
             if missed is not None:
-                cleared.append(missed)
+                section.append(missed)
+    section.sort(key=lambda c: c.distance_along_m or 0.0)
 
     floors = sorted(((f.name, f.elevation_m) for f in project.floors), key=lambda item: item[1])
 
@@ -687,7 +714,7 @@ def elevation_profile(
         vertical_angle_deg=vertical_angle,
         floors=floors,
         crossings=drawable,
-        cleared=cleared,
+        section=section,
         declared=declared,
         floor_crossings=floor_crossings,
         warnings=warnings,

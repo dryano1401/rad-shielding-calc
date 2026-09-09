@@ -2543,12 +2543,12 @@ function drawElevation() {
     ...profile.floors.map(([, elevationM]) => elevationM),
     profile.source.height_m, profile.target.height_m,
     ...profile.crossings.map(c => c.top_z_m),
-    ...(profile.cleared || []).map(c => c.top_z_m),
+    ...(profile.section || []).map(c => c.top_z_m),
     ...cells.map(c => c.height),
   ];
   const horizontals = [
     0, profile.horizontal_total_m,
-    ...(profile.cleared || []).map(c => c.distance_along_m),
+    ...(profile.section || []).map(c => c.distance_along_m),
     ...cells.map(c => c.horizontal),
   ];
   const minH = Math.min(...heights) - 0.5;
@@ -2617,22 +2617,25 @@ function drawElevation() {
     elevationCtx.fillText(crossing.label, x, sy(crossing.top_z_m) - 4);
   }
 
-  // Walls the path goes over or under: outlined rather than filled, so the ray
-  // is visibly clearing them instead of the section just looking empty.
-  for (const wall of profile.cleared || []) {
+  // Every wall on the cut that the path does not go through: outlined rather
+  // than filled, so the ray is visibly missing them instead of the section
+  // just looking empty. "cleared" means gone over or under; "beyond" means
+  // the path stopped short of it, or it sits behind the source.
+  for (const wall of profile.section || []) {
     const x = sx(wall.distance_along_m);
     const top = sy(wall.top_z_m);
     const halfWidth = Math.max(SHIELDING_VIEW_WIDTH_M * scale, 4) / 2;
+    const beyond = wall.relation === 'beyond';
     elevationCtx.save();
-    elevationCtx.strokeStyle = '#5c6675';
+    elevationCtx.strokeStyle = beyond ? '#454c5c' : '#5c6675';
     elevationCtx.lineWidth = 1.5;
-    elevationCtx.setLineDash([5, 4]);
+    elevationCtx.setLineDash(beyond ? [2, 4] : [5, 4]);
     elevationCtx.strokeRect(x - halfWidth, top, halfWidth * 2, sy(wall.base_z_m) - top);
     elevationCtx.restore();
-    elevationCtx.fillStyle = '#7c869a';
+    elevationCtx.fillStyle = beyond ? '#5c6675' : '#7c869a';
     elevationCtx.font = 'italic 10px ui-monospace, monospace';
     elevationCtx.textAlign = 'center';
-    elevationCtx.fillText(`${wall.label} — cleared`, x, top - 4);
+    elevationCtx.fillText(`${wall.label} — ${wall.relation}`, x, top - 4);
   }
 
   // A declared barrier has no drawn position. A path between storeys crosses a
