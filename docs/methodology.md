@@ -285,6 +285,22 @@ NCRP standoff or an entered distance override applies, the read position is
 moved outward to match, so a single distance governs throughout rather than
 the chart being read at one place and the arithmetic quoting another.
 
+**Grazing crossings are not credited.** A drawn wall shields a path only when
+the path passes comfortably inside it. Where the crossing falls within 10 cm
+of the wall's top, its base or either end, the barrier is discarded and the
+point is solved as though the wall were not there.
+
+Whether a ray at 2.06 m is stopped by a wall built to "seven feet" is not
+knowable from a floor plan: the drawn line has a width, the height is nominal
+rather than measured, and the source and target heights are conventions from
+TG-108 Fig. 5 rather than surveyed points. Crediting the barrier on that
+margin would lower the computed dose on the strength of a coincidence, so the
+uncertain case is resolved the conservative way. Dropping attenuation only
+ever raises the required thickness, so the rule can err generous but never
+unsafe, and a test pins that property. The elevation view draws such a wall
+marked *grazed, not counted*, so the discount is visible on the drawing rather
+than being a silent difference between two runs.
+
 **Plan against elevation.** A point on another floor is read from the
 elevation chart when one is assigned, since that is the view describing what
 leaves the gantry vertically. Falling back to the plan chart is allowed but
