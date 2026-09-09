@@ -95,6 +95,20 @@ def test_a_wall_behind_the_source_is_placed_at_a_negative_distance():
     assert profile.section[0].distance_along_m == pytest.approx(-2.0)
 
 
+def test_a_grazed_wall_is_drawn_so_the_discount_is_visible():
+    """A wall dropped for grazing must not just vanish from the section --
+    the reason the point solved as unshielded has to be on the drawing."""
+    project = build_project()
+    source, poi = horizontal_pair(project)
+    add_wall(project, "fl1", base_height_m=0.0, top_height_m=1.04)
+    profile = elevation_profile(project, source, poi)
+
+    assert profile.crossings == []                        # not a barrier
+    assert [c.relation for c in profile.section] == ["grazed"]
+    grazed = profile.section[0]
+    assert grazed.base_z_m < grazed.hit_height_m < grazed.top_z_m   # inside it
+
+
 def test_a_cleared_wall_is_never_a_barrier():
     """The physics must not see a wall the path went over."""
     project = build_project()

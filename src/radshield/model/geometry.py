@@ -39,6 +39,21 @@ TARGET_HEIGHT_BELOW_M = 1.7
 # NCRP 147 point of protection standoff from the distal barrier surface.
 NCRP_STANDOFF_M = 0.3
 
+# How close a path may pass to a wall's edge -- its top, its base, or either
+# end -- before the crossing stops being credited as shielding.
+#
+# Whether a ray at 2.06 m is stopped by a wall built to "seven feet" is not
+# knowable from a floor plan: the drawn line has a width, the height is a
+# nominal figure rather than a measurement, and the source and target heights
+# are conventions from TG-108 Fig. 5 rather than surveyed points. Crediting
+# the barrier in that case would lower the computed dose on the strength of a
+# coincidence. Where the clearance is uncertain the conservative reading is
+# that the wall is not in the way, so a grazing crossing is discarded and the
+# section marks it, rather than the answer quietly depending on a few
+# centimetres. Discarding attenuation only ever raises the required
+# thickness, so this can err generous but never unsafe.
+GRAZE_MARGIN_M = 0.1
+
 
 class GeometryError(ValueError):
     """Raised when a distance cannot be computed from the placed geometry."""
@@ -340,6 +355,8 @@ class Crossing:
     #
     #   "through"  the path passes through the wall -- a real barrier
     #   "cleared"  it crosses the wall in plan but above or below it
+    #   "grazed"   it passes inside the wall, but within GRAZE_MARGIN_M of an
+    #              edge, so the shielding is not relied on
     #   "beyond"   the cut plane crosses the wall, but outside the path's
     #              own extent: past the point, or behind the source
     relation: str = "through"
@@ -367,6 +384,24 @@ class _WallHit:
     top_z: float
     cos_theta: float
     distance_along_m: float
+    # Where the hit falls along the wall itself, and how long the wall is, so
+    # a caller can tell a solid hit from one clipping an end.
+    along_wall_m: float
+    wall_length_m: float
+
+    def grazes(self, margin: float) -> bool:
+        """True when the hit is inside the wall but within ``margin`` of an edge.
+
+        Being inside is not the question -- whether it is *reliably* inside
+        is.  A hit this close to the top, the base or an end is inside only
+        by an amount smaller than the drawing can be trusted to.
+        """
+        return (
+            self.hit_z - self.base_z < margin
+            or self.top_z - self.hit_z < margin
+            or self.along_wall_m < margin
+            or self.wall_length_m - self.along_wall_m < margin
+        )
 
 
 def _wall_plane_hit(
@@ -431,6 +466,8 @@ def _wall_plane_hit(
         top_z=floor.elevation_m + wall.top_height_m,
         cos_theta=abs(denominator) / path_length if path_length else 1.0,
         distance_along_m=t * math.hypot(dx, dy),
+        along_wall_m=along * wall_length,
+        wall_length_m=wall_length,
     )
 
 
@@ -465,6 +502,12 @@ def wall_crossing(
 
     # Within the wall's height band?
     if not hit.base_z <= hit.hit_z <= hit.top_z:
+        return None
+
+    # Inside, but only just?  Then the shielding is not relied on -- see
+    # GRAZE_MARGIN_M.  The elevation view still draws the wall, marked
+    # "grazed", so the decision is visible rather than silent.
+    if hit.grazes(GRAZE_MARGIN_M):
         return None
 
     hit_z, base_z, top_z = hit.hit_z, hit.base_z, hit.top_z
@@ -517,8 +560,12 @@ def wall_in_section(
     if hit is None:
         return None
     within_path = 0.0 <= hit.t <= 1.0
-    if within_path and hit.base_z <= hit.hit_z <= hit.top_z:
+    inside = hit.base_z <= hit.hit_z <= hit.top_z
+    if within_path and inside and not hit.grazes(GRAZE_MARGIN_M):
         return None  # a real crossing; wall_crossing owns it
+    relation = "beyond"
+    if within_path:
+        relation = "grazed" if inside else "cleared"
     return Crossing(
         material=wall.material,
         thickness_mm=wall.thickness_mm,
@@ -530,7 +577,7 @@ def wall_in_section(
         hit_height_m=hit.hit_z,
         base_z_m=hit.base_z,
         top_z_m=hit.top_z,
-        relation="cleared" if within_path else "beyond",
+        relation=relation,
     )
 
 

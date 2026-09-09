@@ -68,6 +68,68 @@ def test_path_crossing_a_wall_is_detected():
     assert crossings[0].thickness_mm == 200.0
 
 
+def test_a_path_grazing_a_wall_top_is_not_credited_with_its_shielding():
+    """Where the clearance is uncertain the conservative reading wins.
+
+    A ray passing 4 cm under a wall built to a nominal 7 ft is inside it only
+    by less than the drawing can be trusted to, so the barrier is not counted
+    and the point is solved as if the wall were not there.
+    """
+    project = build_project()
+    source, poi = horizontal_pair(project)          # both ends 1 m above fl1
+    # Top the wall out just 4 cm above the ray.
+    add_wall(project, "fl1", base_height_m=0.0, top_height_m=1.04)
+    assert path_barriers(project, source, poi)[0] == []
+
+    # Lift it clear of the margin and it counts again.
+    project.floor("fl1").walls[0] = Wall(
+        id="w1", p1=(0.0, -50.0), p2=(0.0, 50.0), material="concrete",
+        thickness_mm=200.0, base_height_m=0.0, top_height_m=1.6,
+    )
+    crossings, _ = path_barriers(project, source, poi)
+    assert [c.material for c in crossings] == ["concrete"]
+
+
+def test_a_path_grazing_a_wall_end_is_not_credited_either():
+    """The same uncertainty applies in plan: clipping the last few centimetres
+    of a wall is not shielding that can be relied on."""
+    project = build_project()
+    source, poi = horizontal_pair(project)          # runs along y = 0
+    # Wall ends 5 cm past the path, so the path clips its very end.
+    add_wall(project, "fl1", p1=(0.0, -100.0), p2=(0.0, -0.5))
+    assert path_barriers(project, source, poi)[0] == []
+
+    # Extend it well past and it is a barrier again.
+    project.floor("fl1").walls[0] = Wall(
+        id="w1", p1=(0.0, -100.0), p2=(0.0, 100.0), material="concrete",
+        thickness_mm=200.0, base_height_m=0.0, top_height_m=3.0,
+    )
+    assert len(path_barriers(project, source, poi)[0]) == 1
+
+
+def test_discounting_a_graze_can_only_raise_the_required_shielding():
+    """Dropping attenuation errs generous, never unsafe -- the property that
+    makes the conservative reading safe to apply automatically."""
+    project = build_project()
+    project.materials = ["lead"]
+    source = uptake_source(floor_id="fl1", x=-40.0, y=0.0)
+    source.params["administered_activity_MBq"] = 5550
+    project.sources.append(source)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl1", x=40.0, y=0.0, auto_height=False,
+        height_above_floor_m=1.0, linked_source_ids=["src1"],
+    )
+    project.pois.append(poi)
+
+    grazing = add_wall(project, "fl1", base_height_m=0.0, top_height_m=1.04)
+    discounted = evaluate_point(project, poi).governing_thickness_mm["lead"]
+
+    grazing.top_height_m = 1.6           # comfortably in the way
+    counted = evaluate_point(project, poi).governing_thickness_mm["lead"]
+
+    assert discounted > counted
+
+
 def test_path_missing_the_wall_end_is_not_blocked():
     """A wall only 1 m long does not block a path passing well clear of it."""
     project = build_project()

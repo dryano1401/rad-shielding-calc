@@ -2617,25 +2617,36 @@ function drawElevation() {
     elevationCtx.fillText(crossing.label, x, sy(crossing.top_z_m) - 4);
   }
 
-  // Every wall on the cut that the path does not go through: outlined rather
-  // than filled, so the ray is visibly missing them instead of the section
-  // just looking empty. "cleared" means gone over or under; "beyond" means
-  // the path stopped short of it, or it sits behind the source.
+  // Every wall on the cut the path is not credited with going through:
+  // outlined rather than filled, so the ray is visibly missing them instead
+  // of the section just looking empty. "cleared" is gone over or under,
+  // "beyond" is past the point or behind the source, and "grazed" is the one
+  // that changes an answer -- the path is inside the wall but too near an
+  // edge to rely on, so the shielding was discounted. That one is called out
+  // in warning colour, because a reviewer needs to see it was a judgement.
+  const SECTION_STYLE = {
+    cleared: { stroke: '#5c6675', text: '#7c869a', dash: [5, 4] },
+    beyond: { stroke: '#454c5c', text: '#5c6675', dash: [2, 4] },
+    grazed: { stroke: '#ffc857', text: '#ffc857', dash: [3, 3] },
+  };
   for (const wall of profile.section || []) {
+    const style = SECTION_STYLE[wall.relation] || SECTION_STYLE.cleared;
     const x = sx(wall.distance_along_m);
     const top = sy(wall.top_z_m);
     const halfWidth = Math.max(SHIELDING_VIEW_WIDTH_M * scale, 4) / 2;
-    const beyond = wall.relation === 'beyond';
     elevationCtx.save();
-    elevationCtx.strokeStyle = beyond ? '#454c5c' : '#5c6675';
-    elevationCtx.lineWidth = 1.5;
-    elevationCtx.setLineDash(beyond ? [2, 4] : [5, 4]);
+    elevationCtx.strokeStyle = style.stroke;
+    elevationCtx.lineWidth = wall.relation === 'grazed' ? 2 : 1.5;
+    elevationCtx.setLineDash(style.dash);
     elevationCtx.strokeRect(x - halfWidth, top, halfWidth * 2, sy(wall.base_z_m) - top);
     elevationCtx.restore();
-    elevationCtx.fillStyle = beyond ? '#5c6675' : '#7c869a';
+    elevationCtx.fillStyle = style.text;
     elevationCtx.font = 'italic 10px ui-monospace, monospace';
     elevationCtx.textAlign = 'center';
-    elevationCtx.fillText(`${wall.label} — ${wall.relation}`, x, top - 4);
+    const caption = wall.relation === 'grazed'
+      ? `${wall.label} — grazed, not counted`
+      : `${wall.label} — ${wall.relation}`;
+    elevationCtx.fillText(caption, x, top - 4);
   }
 
   // A declared barrier has no drawn position. A path between storeys crosses a
