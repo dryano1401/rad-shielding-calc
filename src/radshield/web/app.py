@@ -34,6 +34,7 @@ from ..model.geometry import (
     measurement_length,
 )
 from ..model.project import (
+    DEFAULT_WALL_TOP_M,
     LENGTH_UNITS,
     Barrier,
     Calibration,
@@ -431,7 +432,7 @@ def add_wall(floor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
             material=payload.get("material", "concrete"),
             thickness_mm=float(payload.get("thickness_mm", 150.0)),
             base_height_m=float(payload.get("base_height_m", 0.0)),
-            top_height_m=float(payload.get("top_height_m", 3.0)),
+            top_height_m=float(payload.get("top_height_m", DEFAULT_WALL_TOP_M)),
             label=payload.get("label", ""),
             color=payload.get("color", ""),
         )

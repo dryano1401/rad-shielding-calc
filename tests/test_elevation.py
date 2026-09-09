@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from radshield.model.geometry import GeometryError, elevation_profile
+from radshield.model.geometry import GeometryError, elevation_profile, path_barriers
 from radshield.model.project import Barrier, PointOfInterest
 
 from .test_geometry_and_engine import build_project, uptake_source
@@ -34,6 +34,100 @@ def test_crossed_wall_is_placed_at_its_true_distance_and_height():
     assert crossing.base_z_m == pytest.approx(4.3 + 0.0)
     assert crossing.top_z_m == pytest.approx(4.3 + 3.0)
     assert crossing.hit_height_m == pytest.approx(5.3)
+
+
+def test_a_wall_the_path_climbs_over_is_reported_as_cleared_not_crossed():
+    """A partition a climbing path passes above shields nothing, but the
+    cross-section still shows it -- otherwise the drawing looks empty and
+    reads as a fault rather than as a ray going over the wall."""
+    project = build_project()
+    # 2.1 m wall on the source floor, between a source and a point upstairs.
+    add_wall(project, "fl1", p1=(0.0, -50.0), p2=(0.0, 50.0), top_height_m=2.1)
+    source = uptake_source(floor_id="fl1", x=-40.0, y=0.0)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl2", x=40.0, y=0.0, auto_height=True,
+        linked_source_ids=["src1"],
+    )
+    project.pois.append(poi)
+    profile = elevation_profile(project, source, poi)
+
+    assert profile.crossings == []          # nothing shields the path
+    assert len(profile.section) == 1        # but the wall is still drawn
+    cleared = profile.section[0]
+    assert cleared.relation == "cleared"
+    assert cleared.effective_thickness_mm == 0.0
+    assert cleared.hit_height_m > cleared.top_z_m
+
+
+def test_a_wall_past_the_point_is_still_drawn_in_the_section():
+    """A section cuts the whole building along the line, so a wall the path
+    stops short of is drawn where it sits -- that is what makes the drawing
+    usable as a geometry check rather than only as a barrier list."""
+    project = build_project()
+    # Wall at x = 0 (0 m), but the path runs from -4 m only to -2 m.
+    add_wall(project, "fl1", p1=(0.0, -50.0), p2=(0.0, 50.0))
+    source = uptake_source(floor_id="fl1", x=-40.0, y=0.0)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl1", x=-20.0, y=0.0, auto_height=False,
+        height_above_floor_m=1.0, linked_source_ids=["src1"],
+    )
+    project.pois.append(poi)
+    profile = elevation_profile(project, source, poi)
+
+    assert profile.crossings == []                       # the path never reaches it
+    assert [c.relation for c in profile.section] == ["beyond"]
+    # It is drawn at its real distance along the line, past the point's 2 m.
+    assert profile.section[0].distance_along_m == pytest.approx(4.0)
+    assert profile.horizontal_total_m == pytest.approx(2.0)
+
+
+def test_a_wall_behind_the_source_is_placed_at_a_negative_distance():
+    project = build_project()
+    add_wall(project, "fl1", p1=(-60.0, -50.0), p2=(-60.0, 50.0))
+    source = uptake_source(floor_id="fl1", x=-40.0, y=0.0)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl1", x=40.0, y=0.0, auto_height=False,
+        height_above_floor_m=1.0, linked_source_ids=["src1"],
+    )
+    project.pois.append(poi)
+    profile = elevation_profile(project, source, poi)
+    assert [c.relation for c in profile.section] == ["beyond"]
+    assert profile.section[0].distance_along_m == pytest.approx(-2.0)
+
+
+def test_a_cleared_wall_is_never_a_barrier():
+    """The physics must not see a wall the path went over."""
+    project = build_project()
+    add_wall(project, "fl1", p1=(0.0, -50.0), p2=(0.0, 50.0), top_height_m=2.1)
+    source = uptake_source(floor_id="fl1", x=-40.0, y=0.0)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl2", x=40.0, y=0.0, auto_height=True,
+        linked_source_ids=["src1"],
+    )
+    project.pois.append(poi)
+    crossings, _ = path_barriers(project, source, poi)
+    assert crossings == []
+
+
+def test_declared_barriers_are_reported_with_the_floor_the_path_crosses():
+    """A slab is often the only thing shielding a route upstairs, so it is
+    reported along with the floor level it can be drawn at."""
+    project = build_project()
+    source = uptake_source(floor_id="fl1", x=0.0, y=0.0)
+    poi = PointOfInterest(
+        id="poi1", floor_id="fl2", x=40.0, y=0.0, auto_height=True,
+        linked_source_ids=["src1"],
+    )
+    poi.manual_barriers[source.id] = [
+        Barrier(material="concrete", thickness_mm=114.0, label="floor")
+    ]
+    project.pois.append(poi)
+    profile = elevation_profile(project, source, poi)
+
+    assert [d.label for d in profile.declared] == ["floor"]
+    assert profile.crossings == []
+    # The upper floor's slab lies between the two ends, so it can be drawn.
+    assert [name for name, _, _ in profile.floor_crossings] == ["Above"]
 
 
 def test_manually_declared_barriers_are_excluded_from_the_drawing():

@@ -30,6 +30,11 @@ LENGTH_UNITS: dict[str, float] = {
 }
 
 
+# A wall is drawn 7 ft tall unless told otherwise -- the height lead is
+# normally carried to, and the height the shielding notes on a drawing
+# assume when they do not say.
+DEFAULT_WALL_TOP_M = 2.1
+
 # No structural barrier is metres thick.  Anything beyond this is a units
 # slip, and saying so is far better than silently shielding with a 200 m wall.
 MAX_WALL_THICKNESS_MM = 3000.0
@@ -250,7 +255,7 @@ class Wall:
     material: str = "concrete"
     thickness_mm: float = 150.0
     base_height_m: float = 0.0
-    top_height_m: float = 3.0
+    top_height_m: float = DEFAULT_WALL_TOP_M
     label: str = ""
     color: str = ""
 
@@ -547,7 +552,7 @@ class Project:
                     material=w.get("material", "concrete"),
                     thickness_mm=w.get("thickness_mm", 150.0),
                     base_height_m=w.get("base_height_m", 0.0),
-                    top_height_m=w.get("top_height_m", 3.0),
+                    top_height_m=w.get("top_height_m", DEFAULT_WALL_TOP_M),
                     label=w.get("label", ""),
                     color=w.get("color", ""),
                 )
