@@ -17,7 +17,7 @@ from .test_geometry_and_engine import build_project
 def carm_source(**params) -> SourcePoint:
     defaults = {
         "kvp": 100,
-        "kap_week_uGy_cm2": 9.648e8,
+        "kap_week_mGy_cm2": 9.648e5,
         "field_area_cm2": 900.0,
         "field_distance_m": 1.0,
     }
@@ -30,7 +30,7 @@ def carm_source(**params) -> SourcePoint:
 
 def base_inputs(**kwargs) -> carm.CArmInputs:
     defaults = dict(
-        kvp=100.0, kap_week_uGy_cm2=9.648e8, scatter_distance_m=3.0,
+        kvp=100.0, kap_week_mGy_cm2=9.648e5, scatter_distance_m=3.0,
         leakage_distance_m=3.0, occupancy=1.0, field_area_cm2=900.0,
     )
     defaults.update(kwargs)
@@ -85,7 +85,7 @@ def test_scatter_follows_equation_c2_with_the_field_area_cancelling():
 
     scatter, _, _, _ = carm.unshielded_kerma(base_inputs())
     a1 = carm.scatter_fraction(100.0, carm.DEFAULT_SCATTER_ANGLE_DEG)
-    assert scatter == pytest.approx((9.648e8 / 1000.0) * a1 / 9.0)
+    assert scatter == pytest.approx(9.648e5 * a1 / 9.0)
 
 
 def test_leakage_follows_the_equation_c6_regulatory_cap_model():
@@ -95,7 +95,7 @@ def test_leakage_follows_the_equation_c6_regulatory_cap_model():
     assert ratio == pytest.approx(2.1e-4, rel=0.05)
 
     _, leakage, _, _ = carm.unshielded_kerma(base_inputs())
-    primary_1m = (9.648e8 / 1000.0) * 1.0 / 900.0     # 1072 mGy/week at 1 m
+    primary_1m = 9.648e5 * 1.0 / 900.0     # 1072 mGy/week at 1 m
     assert leakage == pytest.approx(primary_1m * ratio / 9.0)
 
 
@@ -239,4 +239,29 @@ def test_carm_inputs_reject_impossible_geometry():
     with pytest.raises(ValueError):
         base_inputs(field_area_cm2=0.0)
     with pytest.raises(ValueError):
-        base_inputs(kap_week_uGy_cm2=-1.0)
+        base_inputs(kap_week_mGy_cm2=-1.0)
+
+
+def test_a_project_saved_with_the_microgray_key_still_reads_its_kap():
+    """The field was renamed from uGy cm2 to mGy cm2. Ignoring the old key would
+    read a saved project as zero KAP and report no shielding required, so it is
+    converted rather than dropped."""
+    from radshield.engine.evaluate import _carm_kap_mGy_cm2
+
+    assert _carm_kap_mGy_cm2({"kap_week_uGy_cm2": 9.648e8}) == pytest.approx(9.648e5)
+    assert _carm_kap_mGy_cm2({"kap_week_mGy_cm2": 9.648e5}) == pytest.approx(9.648e5)
+    # A project carrying both is taken at the new key, not silently rescaled.
+    assert _carm_kap_mGy_cm2(
+        {"kap_week_mGy_cm2": 500.0, "kap_week_uGy_cm2": 9.648e8}) == pytest.approx(500.0)
+    assert _carm_kap_mGy_cm2({}) == 0.0
+
+
+def test_the_legacy_key_gives_the_same_answer_through_the_engine():
+    legacy = carm_source()
+    legacy.params = {k: v for k, v in legacy.params.items() if k != "kap_week_mGy_cm2"}
+    legacy.params["kap_week_uGy_cm2"] = 9.648e8
+
+    project = build_project()
+    project.sources.append(legacy)
+    assert reference_dose(project, legacy)["value"] == pytest.approx(
+        reference_dose(build_project(), carm_source())["value"])

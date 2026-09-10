@@ -198,7 +198,7 @@ class CArmInputs:
 
     Attributes:
         kvp: Maximum or design operating potential.
-        kap_week_uGy_cm2: Weekly air-kerma--area product.
+        kap_week_mGy_cm2: Weekly air-kerma--area product, mGy cm2.
         scatter_distance_m: dS, patient/scatter centre to the point of
             protection.  The placed source point is the scatter centre, as a
             CT source's placed point is its isocentre.
@@ -222,7 +222,7 @@ class CArmInputs:
     """
 
     kvp: float
-    kap_week_uGy_cm2: float
+    kap_week_mGy_cm2: float
     scatter_distance_m: float
     leakage_distance_m: float
     occupancy: float
@@ -240,7 +240,7 @@ class CArmInputs:
             raise ValueError("scatter and leakage distances must be positive")
         if not 0 < self.occupancy <= 1:
             raise ValueError(f"occupancy must be in (0, 1], got {self.occupancy}")
-        if self.kap_week_uGy_cm2 < 0:
+        if self.kap_week_mGy_cm2 < 0:
             raise ValueError("weekly KAP cannot be negative")
         if self.field_area_cm2 <= 0 or self.field_distance_m <= 0:
             raise ValueError("field area and field distance must be positive")
@@ -284,7 +284,7 @@ def unshielded_kerma(inputs: CArmInputs) -> tuple[float, float, dict[str, float]
             f"at {inputs.kvp:g} kVp, {inputs.scatter_angle_deg:g} degrees"
         )
 
-    kap_mGy_cm2 = inputs.kap_week_uGy_cm2 / 1000.0
+    kap_mGy_cm2 = inputs.kap_week_mGy_cm2
 
     # Equation C.2 with KAP substituted for K_P(1 m) * F / dF^2.
     scatter = kap_mGy_cm2 * a1 * inputs.scatter_multiplier / (inputs.scatter_distance_m**2)
@@ -317,7 +317,7 @@ def unshielded_kerma(inputs: CArmInputs) -> tuple[float, float, dict[str, float]
     leakage = leakage_1m / (inputs.leakage_distance_m**2)
 
     terms = {
-        "weekly KAP (uGy cm2)": inputs.kap_week_uGy_cm2,
+        "weekly KAP (mGy cm2)": inputs.kap_week_mGy_cm2,
         "scatter fraction a1 (per cm2 at 1 m)": a1,
         "scattering angle (deg)": inputs.scatter_angle_deg,
         "dS (m)": inputs.scatter_distance_m,

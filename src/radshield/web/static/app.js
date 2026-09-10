@@ -1732,8 +1732,14 @@ function renderSourceInspector(title, box) {
         evaluated from scatter plus tube-housing leakage. There is no primary term.
         Place the source at the patient/scatter centre.</p>
       <div class="field">Maximum kVp<input type="number" step="1" value="${p.kvp ?? 100}" data-k="kvp"></div>
-      <div class="field">Weekly KAP (µGy·cm²/week)
-        <input type="number" step="any" value="${p.kap_week_uGy_cm2 ?? ''}" data-k="kap_week_uGy_cm2"></div>
+      <div class="field">Weekly KAP (mGy·cm²/week)
+        <input type="number" step="any"
+               value="${p.kap_week_mGy_cm2 ?? (p.kap_week_uGy_cm2 != null ? p.kap_week_uGy_cm2 / 1000 : '')}"
+               data-k="kap_week_mGy_cm2"></div>
+      <p class="hint">1 Gy·cm² = 1000 mGy·cm². A general-surgery C-arm runs roughly
+        400 000–800 000 mGy·cm²/week by NCRP 147's R&amp;F fluoroscopy workload; a hybrid
+        room doing endovascular work is several times that. Read it off the unit's dose
+        log where you can.</p>
       <div class="field">Scattering angle (degrees)
         <input type="number" step="5" value="${p.scatter_angle_deg ?? 135}" data-k="scatter_angle_deg"></div>
       <p class="hint">From the primary beam axis to the protected area. NCRP 147 tabulates

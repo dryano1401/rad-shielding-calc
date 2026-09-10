@@ -187,6 +187,19 @@ def _ct_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_ct.CT
     )
 
 
+def _carm_kap_mGy_cm2(params: dict[str, Any]) -> float:
+    """Weekly KAP in mGy cm2, migrating the microgray key projects were saved with.
+
+    The field was originally stored as uGy cm2, which forced entry of a number
+    like 7.3e8 for a typical room.  Dropping the old key would read a saved
+    project as zero KAP and report that no shielding is required, so it is
+    converted rather than ignored.
+    """
+    if params.get("kap_week_mGy_cm2") is not None:
+        return float(params["kap_week_mGy_cm2"] or 0.0)
+    return float(params.get("kap_week_uGy_cm2", 0.0) or 0.0) / 1000.0
+
+
 def _carm_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_carm.CArmInputs:
     """Build C-arm barrier inputs from the stored parameters.
 
@@ -200,7 +213,7 @@ def _carm_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_car
     offset = float(p.get("leakage_distance_offset_m", 0.0) or 0.0)
     return ncrp_carm.CArmInputs(
         kvp=float(p.get("kvp", 100)),
-        kap_week_uGy_cm2=float(p.get("kap_week_uGy_cm2", 0.0) or 0.0),
+        kap_week_mGy_cm2=_carm_kap_mGy_cm2(p),
         scatter_distance_m=dist,
         leakage_distance_m=max(dist + offset, 1e-6),
         occupancy=occupancy,
