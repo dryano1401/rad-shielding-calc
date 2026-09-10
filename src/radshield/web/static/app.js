@@ -29,6 +29,8 @@ const state = {
   wallOpacity: 0.75,        // view-only: how solid drawn walls render, e.g. for a screenshot
   shieldingView: false,     // view-only: colour every wall by its thickness, for a report figure
   worstCase: false,         // view-only: the worst-case exposure overlay
+  worstCaseGoal: 'uncontrolled',   // which design goal the overlay is read against
+  worstCaseTrial: '',       // "<material>|<mm>" hypothetical barrier, or '' for none
   exposure: null,           // /api/exposure payload for the floor being viewed
   exposureTile: null,       // the overlay rasterised once, redrawn on every pan
   elevation: null,          // /api/elevation payload for the dialog's current source/point pair
@@ -481,9 +483,16 @@ function drawExposureLegend() {
   ctx.font = '12px system-ui';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
+  const trialLine = map.trial_material
+    ? `assuming ${map.trial_material} ${map.trial_thickness_mm} mm on every path`
+    : '';
   const labels = EXPOSURE_BANDS.map(b => b.label);
-  const width = Math.max(...labels.map(l => ctx.measureText(l).width)) + 62;
-  const height = EXPOSURE_BANDS.length * 21 + 46;
+  ctx.font = '10px system-ui';
+  const trialWidth = trialLine ? ctx.measureText(trialLine).width + 24 : 0;
+  ctx.font = '12px system-ui';
+  const width = Math.max(
+    Math.max(...labels.map(l => ctx.measureText(l).width)) + 62, trialWidth);
+  const height = EXPOSURE_BANDS.length * 21 + 46 + (trialLine ? 14 : 0);
   ctx.fillStyle = 'rgba(10,12,16,.9)';
   ctx.strokeStyle = '#3a4152';
   ctx.lineWidth = 1;
@@ -495,9 +504,11 @@ function drawExposureLegend() {
   ctx.fillStyle = '#96a0b1';
   ctx.font = '10px system-ui';
   ctx.fillText(`T = 1, ${map.area_class}, ${map.height_m} m above floor`, 24, 46);
+  if (trialLine) ctx.fillText(trialLine, 24, 60);
   ctx.font = '12px system-ui';
+  const bandTop = 64 + (trialLine ? 14 : 0);
   EXPOSURE_BANDS.forEach((band, index) => {
-    const y = 64 + index * 21;
+    const y = bandTop + index * 21;
     ctx.fillStyle = `rgb(${band.rgb.join(',')})`;
     ctx.fillRect(24, y - 7, 28, 14);
     ctx.strokeStyle = '#101319';
@@ -2259,7 +2270,15 @@ async function refreshExposure() {
   }
   setStatus('Solving the worst-case grid…');
   try {
-    const map = await api(`/api/exposure?floor_id=${state.floorId}`);
+    const [trialMaterial, trialMm] = state.worstCaseTrial
+      ? state.worstCaseTrial.split('|') : ['', 0];
+    const query = new URLSearchParams({
+      floor_id: state.floorId,
+      area_class: state.worstCaseGoal,
+      trial_material: trialMaterial,
+      trial_thickness_mm: trialMm,
+    });
+    const map = await api(`/api/exposure?${query}`);
     if (ticket !== exposureRequest) return;
     state.exposure = map;
     buildExposureTile();
@@ -2267,9 +2286,14 @@ async function refreshExposure() {
       .flat().filter(v => v !== null).reduce((a, b) => Math.max(a, b), 0);
     const over = state.exposure.ratios.flat().filter(v => v !== null && v >= 1).length;
     const solved = state.exposure.ratios.flat().filter(v => v !== null).length;
+    const trial = state.exposure.trial_material
+      ? ` assuming ${state.exposure.trial_material} `
+        + `${state.exposure.trial_thickness_mm} mm on every path,`
+      : '';
     setStatus(solved
-      ? `Worst case: ${over} of ${solved} cells over goal, peak ${worst.toPrecision(3)}× — `
-        + `everything green cannot exceed the goal at full occupancy.`
+      ? `Worst case${trial} ${state.exposure.area_class} goal: ${over} of ${solved} cells `
+        + `over goal, peak ${worst.toPrecision(3)}× — everything green cannot exceed `
+        + `the goal at full occupancy.`
       : (state.exposure.warnings[0] || 'Nothing to map on this floor.'));
   } catch (error) {
     if (ticket !== exposureRequest) return;
@@ -2282,6 +2306,20 @@ async function refreshExposure() {
 
 document.getElementById('worst-case').onchange = event => {
   state.worstCase = event.target.checked;
+  // The two qualifiers are meaningless with the overlay off, and leaving them
+  // on screen invites reading a stale map against a setting it never used.
+  document.getElementById('worst-case-goal-wrap').hidden = !state.worstCase;
+  document.getElementById('worst-case-trial-wrap').hidden = !state.worstCase;
+  refreshExposure();
+};
+
+document.getElementById('worst-case-goal').onchange = event => {
+  state.worstCaseGoal = event.target.value;
+  refreshExposure();
+};
+
+document.getElementById('worst-case-trial').onchange = event => {
+  state.worstCaseTrial = event.target.value;
   refreshExposure();
 };
 

@@ -26,6 +26,16 @@ anything on the strength of it.
 Each of those pushes the answer up.  A cell under its goal here is under its
 goal for any milder set of assumptions, which is what lets the clear regions
 be dismissed rather than merely deprioritised.
+
+Two of those assumptions can be relaxed deliberately, because a reviewer
+often wants a different question answered.  Switching to the controlled goal
+asks what a staff-only area needs; that goal is five times looser, so a map
+read against it is *not* a bound on an uncontrolled space and the two must not
+be confused.  A trial barrier asks what a candidate specification would leave
+hot -- lay 1/16 inch of lead on every path and see what stays red -- which
+turns the map from "where is the problem" into "does this fix it".  Both are
+recorded on the returned map so a screenshot cannot be read against the wrong
+assumption.
 """
 
 from __future__ import annotations
@@ -34,7 +44,7 @@ import copy
 import math
 from dataclasses import dataclass, field
 
-from ..model.project import PointOfInterest, Project
+from ..model.project import PointOfInterest, Project, TrialBarrier
 from .evaluate import evaluate_point
 
 # Thresholds the map's colours are cut at, as a fraction of the design goal.
@@ -48,6 +58,14 @@ TIGHT_FRACTION = 2.0 / 3.0
 # same floor.  Cross-floor cells follow the TG-108 Fig. 5 conventions instead,
 # exactly as a placed point does.
 DEFAULT_MAP_HEIGHT_M = 1.7
+
+# Sheet lead is sold by weight, so the gauges a drawing actually calls out are
+# these, not round millimetres.  1 lb/ft2 is nominally 1/64 inch.
+LEAD_GAUGES_MM = {
+    "1/32 in": 0.79,
+    "1/16 in": 1.58,
+    "1/8 in": 3.17,
+}
 
 
 @dataclass
@@ -74,6 +92,8 @@ class ExposureMap:
     source_count: int
     over_goal: float = OVER_GOAL
     tight_fraction: float = TIGHT_FRACTION
+    trial_material: str = ""
+    trial_thickness_mm: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -111,6 +131,8 @@ def exposure_map(
     height_m: float = DEFAULT_MAP_HEIGHT_M,
     occupancy: float = 1.0,
     area_class: str = "uncontrolled",
+    trial_material: str = "",
+    trial_thickness_mm: float = 0.0,
 ) -> ExposureMap:
     """Solve a grid of worst-case points across one floor's drawing.
 
@@ -121,6 +143,12 @@ def exposure_map(
         columns: Cells across the page.  Cost is quadratic in this and every
             cell is a full point solve, so it trades resolution against the
             wait before the overlay appears.
+        area_class: Which design goal the ratios are against.  "controlled" is
+            the looser of the two, so a map drawn against it says nothing
+            about an uncontrolled space.
+        trial_material: Material of a hypothetical barrier added to every
+            path.  Empty means none.
+        trial_thickness_mm: Thickness of that barrier.
     """
     floor = project.floor(floor_id)
     warnings: list[str] = []
@@ -153,6 +181,13 @@ def exposure_map(
     # cell would multiply the wait for a number nothing here reads.
     probe_project = copy.copy(project)
     probe_project.materials = project.materials[:1] or ["lead"]
+    if trial_material and trial_thickness_mm > 0:
+        probe_project.trial_barrier = TrialBarrier(
+            material=trial_material, thickness_mm=float(trial_thickness_mm)
+        )
+    else:
+        probe_project.trial_barrier = None
+        trial_material, trial_thickness_mm = "", 0.0
 
     ratios: list[list[float | None]] = []
     unsolved = 0
@@ -207,5 +242,7 @@ def exposure_map(
         occupancy=occupancy,
         area_class=area_class,
         source_count=len(source_ids),
+        trial_material=trial_material,
+        trial_thickness_mm=float(trial_thickness_mm),
         warnings=warnings,
     )

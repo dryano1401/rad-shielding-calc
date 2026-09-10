@@ -123,8 +123,31 @@
       </label>
       <label class="ghost-toggle" title="Display only: colour every wall by its thickness and draw it heavy enough to see, with a key -- the figure a report needs to show which lead goes where">
         <input id="shielding-view" type="checkbox"> Shielding colors</label>
-      <label class="ghost-toggle" title="Screening overlay: worst-case dose across the whole floor at full occupancy against the uncontrolled goal, so the areas that cannot exceed it can be set aside">
+      <label class="ghost-toggle" title="Screening overlay: worst-case dose across the whole floor at full occupancy, so the areas that cannot exceed the goal can be set aside">
         <input id="worst-case" type="checkbox"> Worst case</label>
+      <label class="ghost-toggle" id="worst-case-goal-wrap" hidden
+             title="Which design goal the map is read against. Controlled is five times looser, so a map drawn against it says nothing about an uncontrolled space.">
+        Goal
+        <select id="worst-case-goal">
+          <option value="uncontrolled">uncontrolled</option>
+          <option value="controlled">controlled</option>
+        </select>
+      </label>
+      <label class="ghost-toggle" id="worst-case-trial-wrap" hidden
+             title="Lay a hypothetical barrier on every path and re-solve, to see what a candidate specification would leave hot. Nothing is drawn and nothing is saved.">
+        Assume
+        <select id="worst-case-trial">
+          <option value="">no added barrier</option>
+          <option value="Lead|0.79">lead 1/32 in</option>
+          <option value="Lead|1.58">lead 1/16 in</option>
+          <option value="Lead|3.17">lead 1/8 in</option>
+          <option value="Concrete|100">concrete 100 mm (4 in)</option>
+          <option value="Concrete|150">concrete 150 mm (6 in)</option>
+          <option value="Concrete|200">concrete 200 mm (8 in)</option>
+          <option value="Gypsum Wallboard|15.9">gypsum 5/8 in</option>
+          <option value="Gypsum Wallboard|31.8">gypsum 2 x 5/8 in</option>
+        </select>
+      </label>
     </div>
     <div id="canvas-wrap">
       <canvas id="plan"></canvas>

@@ -809,19 +809,40 @@ def elevation_view(source_id: str, poi_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/exposure")
-def exposure(floor_id: str, columns: int = 90, height_m: float = 1.7) -> dict[str, Any]:
+def exposure(
+    floor_id: str,
+    columns: int = 90,
+    height_m: float = 1.7,
+    area_class: str = "uncontrolled",
+    occupancy: float = 1.0,
+    trial_material: str = "",
+    trial_thickness_mm: float = 0.0,
+) -> dict[str, Any]:
     """Worst-case dose across a floor, as a fraction of the design goal.
 
     A screening overlay: every cell is solved by the same evaluator a placed
-    point uses, under full occupancy and the uncontrolled goal, so the regions
-    it calls clear can be set aside rather than merely deprioritised.
+    point uses, under full occupancy, so the regions it calls clear can be set
+    aside rather than merely deprioritised.
+
+    ``area_class`` picks which goal the ratios are against, and
+    ``trial_material``/``trial_thickness_mm`` lay a hypothetical barrier on
+    every path so a candidate specification can be tried before it is drawn.
+    Both are echoed on the response, since a map means nothing without them.
     """
     try:
         session.project.floor(floor_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
+    if area_class not in ("controlled", "uncontrolled"):
+        raise HTTPException(422, f"unknown area class {area_class!r}")
+    if not 0 < occupancy <= 1:
+        raise HTTPException(422, f"occupancy must be in (0, 1], got {occupancy}")
+    if trial_thickness_mm < 0:
+        raise HTTPException(422, "a trial barrier cannot be thinner than nothing")
     return asdict(exposure_map(
         session.project, floor_id, columns=columns, height_m=height_m,
+        area_class=area_class, occupancy=occupancy,
+        trial_material=trial_material, trial_thickness_mm=trial_thickness_mm,
     ))
 
 
