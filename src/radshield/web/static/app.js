@@ -28,6 +28,9 @@ const state = {
   nuclideDefault511: null,  // Archer fit new isotopes prefill from, per material
   wallOpacity: 0.75,        // view-only: how solid drawn walls render, e.g. for a screenshot
   shieldingView: false,     // view-only: colour every wall by its thickness, for a report figure
+  worstCase: false,         // view-only: the worst-case exposure overlay
+  exposure: null,           // /api/exposure payload for the floor being viewed
+  exposureTile: null,       // the overlay rasterised once, redrawn on every pan
   elevation: null,          // /api/elevation payload for the dialog's current source/point pair
   elevationShowGrid: false, // debug overlay of the source's elevation chart grid, in the cross-section
 };
@@ -60,6 +63,9 @@ function setProject(data) {
     fitToView();
   }
   renderAll();
+  // A stale exposure map is worse than none: it would show cleared regions
+  // for geometry that has since moved.
+  if (state.worstCase) refreshExposure();
 }
 
 /* ----------------------------------------------------------------- units */
@@ -85,6 +91,17 @@ const SHIELDING_COLOUR = [
 // thickness -- a lead sheet is far too thin to see at any useful zoom, and
 // here the colour carries the thickness instead of the line width.
 const SHIELDING_VIEW_WIDTH_M = 0.060;
+
+// Worst-case overlay bands, most severe first. Banded rather than a continuous
+// ramp on purpose: the overlay exists to sort the floor into "must look at"
+// and "can be set aside", and a band edge is a decision a legend can state,
+// where a gradient is only an impression.
+const EXPOSURE_BANDS = [
+  { from: 10, rgb: [176, 0, 32], label: '10× goal and above' },
+  { from: 1, rgb: [255, 45, 45], label: 'over the goal — needs a point' },
+  { from: 2 / 3, rgb: [255, 180, 40], label: 'within ⅔ of the goal — little headroom' },
+  { from: 0, rgb: [40, 190, 110], label: 'clear — cannot exceed the goal here' },
+];
 
 const thicknessKey = mm => mm.toFixed(3);
 
@@ -405,18 +422,96 @@ function draw() {
       drawPoints(other, 0.28, floorTransform(other, floor));
     }
   }
+  drawExposure(floor);
   drawWalls(floor);
   drawLinks(floor);
   drawMeasurements(floor);
   drawPoints(floor, 1);
   drawCalibration(floor);
   drawChartGridDebug(floor);
-  drawShieldingLegend();
+  drawShieldingLegend(drawExposureLegend());
+}
+
+// The grid is rasterised once into an offscreen tile and then drawn like the
+// floor image, so panning and zooming cost one drawImage rather than tens of
+// thousands of rectangles.
+function buildExposureTile() {
+  const map = state.exposure;
+  if (!map || !map.columns || !map.rows) { state.exposureTile = null; return; }
+  const tile = document.createElement('canvas');
+  tile.width = map.columns;
+  tile.height = map.rows;
+  const image = tile.getContext('2d').createImageData(map.columns, map.rows);
+  for (let row = 0; row < map.rows; row++) {
+    for (let column = 0; column < map.columns; column++) {
+      const ratio = map.ratios[row][column];
+      const at = (row * map.columns + column) * 4;
+      if (ratio === null || ratio === undefined) continue;   // gap, left clear
+      const band = EXPOSURE_BANDS.find(b => ratio >= b.from) || EXPOSURE_BANDS[EXPOSURE_BANDS.length - 1];
+      image.data[at] = band.rgb[0];
+      image.data[at + 1] = band.rgb[1];
+      image.data[at + 2] = band.rgb[2];
+      image.data[at + 3] = 255;
+    }
+  }
+  tile.getContext('2d').putImageData(image, 0, 0);
+  state.exposureTile = tile;
+}
+
+function drawExposure(floor) {
+  const map = state.exposure;
+  if (!state.worstCase || !map || map.floor_id !== floor.id || !state.exposureTile) return;
+  ctx.save();
+  ctx.translate(state.view.x, state.view.y);
+  ctx.scale(state.view.scale, state.view.scale);
+  ctx.globalAlpha = 0.45;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(state.exposureTile, 0, 0,
+    map.columns * map.step * RENDER_ZOOM, map.rows * map.step * RENDER_ZOOM);
+  ctx.restore();
+}
+
+// Returns the y a following legend should start at, so the two stack rather
+// than overlap when both overlays are on.
+function drawExposureLegend() {
+  const map = state.exposure;
+  if (!state.worstCase || !map || !map.columns) return 12;
+
+  ctx.save();
+  ctx.font = '12px system-ui';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const labels = EXPOSURE_BANDS.map(b => b.label);
+  const width = Math.max(...labels.map(l => ctx.measureText(l).width)) + 62;
+  const height = EXPOSURE_BANDS.length * 21 + 46;
+  ctx.fillStyle = 'rgba(10,12,16,.9)';
+  ctx.strokeStyle = '#3a4152';
+  ctx.lineWidth = 1;
+  ctx.fillRect(12, 12, width, height);
+  ctx.strokeRect(12, 12, width, height);
+
+  ctx.fillStyle = '#e6e9ef';
+  ctx.fillText('Worst case, fraction of goal', 24, 30);
+  ctx.fillStyle = '#96a0b1';
+  ctx.font = '10px system-ui';
+  ctx.fillText(`T = 1, ${map.area_class}, ${map.height_m} m above floor`, 24, 46);
+  ctx.font = '12px system-ui';
+  EXPOSURE_BANDS.forEach((band, index) => {
+    const y = 64 + index * 21;
+    ctx.fillStyle = `rgb(${band.rgb.join(',')})`;
+    ctx.fillRect(24, y - 7, 28, 14);
+    ctx.strokeStyle = '#101319';
+    ctx.strokeRect(24, y - 7, 28, 14);
+    ctx.fillStyle = '#e6e9ef';
+    ctx.fillText(band.label, 62, y);
+  });
+  ctx.restore();
+  return 12 + height + 8;
 }
 
 // Colour only means something with a key beside it, so the shielding view
 // carries its own legend into whatever screenshot is taken of it.
-function drawShieldingLegend() {
+function drawShieldingLegend(topY = 12) {
   if (!state.shieldingView) return;
   const entries = [...shieldingColours().values()];
   if (!entries.length) return;
@@ -431,14 +526,14 @@ function drawShieldingLegend() {
   ctx.fillStyle = 'rgba(10,12,16,.9)';
   ctx.strokeStyle = '#3a4152';
   ctx.lineWidth = 1;
-  ctx.fillRect(12, 12, width, height);
-  ctx.strokeRect(12, 12, width, height);
+  ctx.fillRect(12, topY, width, height);
+  ctx.strokeRect(12, topY, width, height);
 
   ctx.fillStyle = '#e6e9ef';
-  ctx.fillText('Shielding required', 24, 30);
+  ctx.fillText('Shielding required', 24, topY + 18);
   ctx.lineCap = 'round';
   entries.forEach((entry, index) => {
-    const y = 48 + index * 21;
+    const y = topY + 36 + index * 21;
     for (const [colour, lineWidth] of [['#101319', 11], [entry.colour, 7]]) {
       ctx.strokeStyle = colour;
       ctx.lineWidth = lineWidth;
@@ -1360,7 +1455,12 @@ function renderFloorSelect() {
     option.selected = floor.id === state.floorId;
     select.appendChild(option);
   }
-  select.onchange = () => { state.floorId = select.value; fitToView(); renderAll(); };
+  select.onchange = () => {
+    state.floorId = select.value;
+    fitToView();
+    renderAll();
+    if (state.worstCase) refreshExposure();
+  };
 }
 
 function renderMaterials() {
@@ -2077,6 +2177,40 @@ document.getElementById('wall-opacity').oninput = event => {
   state.wallOpacity = parseFloat(event.target.value);
   draw();
 };
+// The map is a few thousand full point solves, so it is fetched once per
+// floor and kept until something that would move it changes.
+async function refreshExposure() {
+  if (!state.worstCase || !state.floorId) {
+    state.exposure = null;
+    state.exposureTile = null;
+    draw();
+    return;
+  }
+  setStatus('Solving the worst-case grid…');
+  try {
+    state.exposure = await api(`/api/exposure?floor_id=${state.floorId}`);
+    buildExposureTile();
+    const worst = state.exposure.ratios
+      .flat().filter(v => v !== null).reduce((a, b) => Math.max(a, b), 0);
+    const over = state.exposure.ratios.flat().filter(v => v !== null && v >= 1).length;
+    const solved = state.exposure.ratios.flat().filter(v => v !== null).length;
+    setStatus(solved
+      ? `Worst case: ${over} of ${solved} cells over goal, peak ${worst.toPrecision(3)}× — `
+        + `everything green cannot exceed the goal at full occupancy.`
+      : (state.exposure.warnings[0] || 'Nothing to map on this floor.'));
+  } catch (error) {
+    state.exposure = null;
+    state.exposureTile = null;
+    setStatus(`Worst-case map failed: ${error.message}`);
+  }
+  draw();
+}
+
+document.getElementById('worst-case').onchange = event => {
+  state.worstCase = event.target.checked;
+  refreshExposure();
+};
+
 document.getElementById('shielding-view').onchange = event => {
   state.shieldingView = event.target.checked;
   document.getElementById('wall-opacity').disabled = state.shieldingView;

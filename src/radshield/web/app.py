@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from ..engine.exposure import exposure_map
 from ..engine.evaluate import (
     describe_barriers,
     describe_distances,
@@ -805,6 +806,23 @@ def elevation_view(source_id: str, poi_id: str) -> dict[str, Any]:
     except GeometryError as exc:
         raise HTTPException(400, str(exc)) from exc
     return asdict(profile)
+
+
+@app.get("/api/exposure")
+def exposure(floor_id: str, columns: int = 90, height_m: float = 1.7) -> dict[str, Any]:
+    """Worst-case dose across a floor, as a fraction of the design goal.
+
+    A screening overlay: every cell is solved by the same evaluator a placed
+    point uses, under full occupancy and the uncontrolled goal, so the regions
+    it calls clear can be set aside rather than merely deprioritised.
+    """
+    try:
+        session.project.floor(floor_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return asdict(exposure_map(
+        session.project, floor_id, columns=columns, height_m=height_m,
+    ))
 
 
 @app.get("/api/report.docx")
