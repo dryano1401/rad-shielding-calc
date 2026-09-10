@@ -344,6 +344,86 @@ per 100 mAs occur too. The basis is recorded with the chart and decides what
 the weekly total is formed from: a procedure count, or the weekly workload in
 mAs.
 
+### C-arm secondary barriers, KAP method
+
+A C-arm's image receptor is the primary-beam stop, so Appendix C's opening
+case applies: there is no primary term and every barrier is secondary. What
+distinguishes it from the room workloads above is the input. A C-arm meters
+its output as air-kerma–area product, not as patients through a Table 4.2
+distribution, so the barrier is worked from KAP directly.
+
+**Scatter.** Equation C.2 with `KAP = K_P(1 m) · F / d_F²` substituted in:
+
+```
+K_S = KAP · a₁ / d_S²
+```
+
+The field area cancels out of the scatter term entirely — it survives only in
+the leakage estimate, which needs `K_P(1 m)` on its own. `a₁` is the scatter
+fraction per cm² of primary beam area at 1 m, and comes from the polynomial
+printed inside Figure C.1 for tungsten-anode beams:
+
+```
+a₁ = [1.6×10⁻² (kVp − 125) + 8.43 − 1.11×10⁻¹ θ + 9.83×10⁻⁴ θ² − 1.74×10⁻⁶ θ³] × 10⁻⁶
+```
+
+valid over the plotted range, 50–150 kVp and 20–140°, and refused outside it.
+The angular dependence is the larger of the two: at 100 kVp `a₁` runs from
+4.5 at its 69° minimum to 7.0 at 140°. The default is 135°, the
+forward-/backscatter case NCRP 147 tabulates in Table 4.7 alongside 90°, and
+the more conservative of the two — a rotating gantry rarely fixes the angle,
+and 90° sits near the least conservative value available.
+
+**Leakage.** Equations C.6–C.8, pinned to the regulatory cap of 100 mR/h
+(0.876 mGy/h) at 1 m at the leakage technique factors:
+
+```
+K_L(1 m) = (K̇_lim / 60) · kVp² · B_housing(kVp) · W
+           / (kVp_max² · B_housing(kVp_max) · I_max)
+```
+
+with `kVp_max = 150`, `I_max = 3.3 mA` and `B_housing` the primary
+transmission through the 2.32 mm lead housing the report derives for those
+factors. The workload `W` in mA·min is not metered by a C-arm either, but it
+follows from KAP through Figure B.1's air kerma per unit workload,
+
+```
+K_W(kVp) = 1.222 − 5.664×10⁻² kVp + 1.227×10⁻³ kVp² − 3.136×10⁻⁶ kVp³
+W = K_P(1 m) / K_W(kVp)
+```
+
+which closes the loop and leaves the whole barrier a function of KAP, kVp and
+geometry. The resulting leakage-to-primary ratio is 4.5×10⁻⁴ at 150 kVp,
+2.1×10⁻⁴ at 100 kVp, and collapses by orders of magnitude below that — the
+housing stops a 70 kVp beam almost entirely, which is the report's basis for
+calling the leakage contribution negligible under 100 kVp.
+
+**Why the components are attenuated separately.** Table C.1's fits are for the
+*combined* secondary transmission, so they bake in a particular
+scatter-to-leakage mix: the one produced by 90° scatter at the Table 4.7 beam
+sizes with 150 kVp / 3.3 mA leakage. A C-arm's mix is set by its own KAP,
+housing and geometry instead. Section C.4 is written for exactly this case —
+sum the separately attenuated contributions and iterate for the thickness
+that brings the total to `P/T`. Scatter is attenuated with the primary fit
+(Equation C.3: "assumed identical to that of the primary beam") and leakage
+as `exp(−ln2 · x / x_½)` at the high-attenuation half-value layer (Equation
+C.8), which for the Archer form is `exp(−α x)` — deliberately the asymptote's
+slope without its prefactor, so leakage sits above the primary curve at every
+thickness.
+
+Because both components decay at the same asymptotic rate `α`, leakage's
+share of the transmitted kerma rises with depth and then plateaus rather than
+taking over: for the 100 kVp reference case it goes from 3% unshielded to a
+32% asymptote. That rise is why the report declines to drop leakage; the
+plateau is why the combined fit is not badly wrong. Solving the components
+separately and inverting Table C.1's combined fit land within 3% of each
+other on that case, with the tabulated route the conservative side — a useful
+cross-check that neither construction has gone astray.
+
+Walls the ray merely crosses on its way to the point are still attenuated
+with a single curve, Table C.1's combined secondary fit at the source's kVp.
+Only the barrier being solved for is handled component-wise.
+
 ### Validation status
 
 The extracted set contains no worked examples, so the NCRP 147 tests verify

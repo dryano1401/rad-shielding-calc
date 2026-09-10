@@ -1720,12 +1720,57 @@ function renderSourceInspector(title, box) {
         <option value="tg108" ${source.method === 'tg108' ? 'selected' : ''}>TG-108 nuclear medicine</option>
         <option value="ncrp147" ${source.method === 'ncrp147' ? 'selected' : ''}>NCRP 147 x-ray / fluoroscopy</option>
         <option value="ncrp147_ct" ${source.method === 'ncrp147_ct' ? 'selected' : ''}>NCRP 147 CT</option>
+        <option value="carm" ${source.method === 'carm' ? 'selected' : ''}>NCRP 147 C-arm (KAP)</option>
       </select>
     </div>
     <div class="field">Height above floor (m)
       <input type="number" step="0.1" value="${source.height_above_floor_m}" data-p="height_above_floor_m">
     </div>
     ${source.method === 'tg108' ? renderIsotopes(source) + `
+    ` : source.method === 'carm' ? `
+      <p class="hint">The image receptor is the primary-beam stop, so every barrier is
+        evaluated from scatter plus tube-housing leakage. There is no primary term.
+        Place the source at the patient/scatter centre.</p>
+      <div class="field">Maximum kVp<input type="number" step="1" value="${p.kvp ?? 100}" data-k="kvp"></div>
+      <div class="field">Weekly KAP (µGy·cm²/week)
+        <input type="number" step="any" value="${p.kap_week_uGy_cm2 ?? ''}" data-k="kap_week_uGy_cm2"></div>
+      <div class="field">Scattering angle (degrees)
+        <input type="number" step="5" value="${p.scatter_angle_deg ?? 135}" data-k="scatter_angle_deg"></div>
+      <p class="hint">From the primary beam axis to the protected area. NCRP 147 tabulates
+        90° (side-scatter) and 135° (forward- and backscatter); 135° is the more
+        conservative of the two, and a rotating gantry rarely fixes the angle. The scatter
+        fraction is lowest near 69°, so dropping below 90° needs a reason.</p>
+      <div class="field">Scatter fraction a₁ (per cm² at 1 m)
+        <input type="number" step="any" placeholder="NCRP 147 Figure C.1 fit"
+               value="${p.scatter_fraction ?? ''}" data-k="scatter_fraction"></div>
+      <p class="hint">Blank uses the polynomial printed in NCRP 147 Figure C.1 for
+        tungsten-anode beams, valid 50–150 kVp and 20–140°. Enter a value only to override
+        it with the equipment's own scatter data.</p>
+      <div class="row">
+        <label>Field area (cm²)<input type="number" step="any" value="${p.field_area_cm2 ?? 900}" data-k="field_area_cm2"></label>
+        <label>at distance (m)<input type="number" step="any" value="${p.field_distance_m ?? 1}" data-k="field_distance_m"></label>
+      </div>
+      <p class="hint">Used only to convert KAP into the primary air kerma at 1 m, which
+        drives the leakage term — it cancels out of the scatter term.</p>
+      <div class="field">Housing leakage fraction
+        <input type="number" step="any" placeholder="NCRP 147 Eq. C.6–C.8"
+               value="${p.leakage_fraction ?? ''}" data-k="leakage_fraction"></div>
+      <p class="hint">Blank derives leakage from the 0.876 mGy/h regulatory cap at 1 m,
+        scaled by kVp² and the 2.32 mm housing transmission — about 2×10⁻⁴ of the primary
+        at 100 kVp, 4.5×10⁻⁴ at 150 kVp, and negligible below 100 kVp. Enter a fraction
+        only to override it with a vendor figure quoted that way.</p>
+      <div class="field">Measured leakage at 1 m (µGy/week)
+        <input type="number" step="any" placeholder="optional, overrides both"
+               value="${p.leakage_at_1m_uGy_week ?? ''}" data-k="leakage_at_1m_uGy_week"></div>
+      <div class="field">Tube distance offset (m)
+        <input type="number" step="0.1" value="${p.leakage_distance_offset_m ?? 0}" data-k="leakage_distance_offset_m"></div>
+      <p class="hint">Added to the geometric distance for the leakage term only. Zero puts
+        the focal spot at the scatter centre, which is the conservative reading when the
+        tube is actually further from the point.</p>
+      <div class="field">Scatter multiplier
+        <input type="number" step="0.05" value="${p.scatter_multiplier ?? 1}" data-k="scatter_multiplier"></div>
+      <div class="field">Source of the scatter data
+        <input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
     ` : source.method === 'ncrp147' ? `
       <div class="field">Workload distribution<select data-k="workload">${workloadOptions}</select></div>
       <div class="field">Barrier type

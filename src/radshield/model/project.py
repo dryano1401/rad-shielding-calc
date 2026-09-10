@@ -17,7 +17,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-Method = Literal["tg108", "ncrp147", "ncrp147_ct"]
+Method = Literal["tg108", "ncrp147", "ncrp147_ct", "carm"]
 AreaClass = Literal["controlled", "uncontrolled"]
 
 # Metres per unit, for the distance units offered during calibration.
