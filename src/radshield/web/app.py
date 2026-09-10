@@ -885,4 +885,29 @@ async def upload_project(file: UploadFile) -> dict[str, Any]:
     return _project_payload()
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class _RevalidatingStatics(StaticFiles):
+    """Static files the browser must revalidate before reusing.
+
+    index.html is served by a route with no validators, so browsers refetch it
+    every time, but StaticFiles sets Last-Modified without a Cache-Control.
+    That leaves app.js eligible for *heuristic* caching -- held for a fraction
+    of its age with no revalidation -- and the asymmetry serves fresh markup
+    against stale script: a control appears because its HTML is current while
+    its handler is missing from the cached JS, which reads as a dead button
+    rather than as a caching problem.
+
+    ``no-cache`` permits caching but requires revalidation, so the common case
+    stays a 304 with an empty body rather than a full transfer.
+    """
+
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        response_headers.setdefault("cache-control", "no-cache")
+        return super().is_not_modified(response_headers, request_headers)
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("cache-control", "no-cache")
+        return response
+
+
+app.mount("/static", _RevalidatingStatics(directory=STATIC_DIR), name="static")
