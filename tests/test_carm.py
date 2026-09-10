@@ -172,10 +172,24 @@ def test_the_leakage_share_grows_with_depth_then_plateaus():
 
 
 def test_the_thickness_solve_hits_the_requested_transmission():
+    """The solve's tolerance is on thickness -- a nanometre of lead -- so the
+    transmission it lands on is that bracket carried through the curve, a few
+    parts per million rather than exact."""
     inputs = base_inputs()
     for b in (0.5, 0.05, 1e-3):
         x = carm.thickness_for_transmission(inputs, "lead", b)
-        assert carm.transmitted_fraction(inputs, "lead", x) == pytest.approx(b, rel=1e-6)
+        assert carm.transmitted_fraction(inputs, "lead", x) == pytest.approx(b, rel=1e-4)
+
+
+def test_the_thickness_solve_brackets_the_answer_from_above():
+    """Bisection returns the high side, so the thickness is never reported thinner
+    than the one that meets the goal."""
+    inputs = base_inputs()
+    for b in (0.5, 0.05, 1e-3):
+        x = carm.thickness_for_transmission(inputs, "lead", b)
+        assert carm.transmitted_fraction(inputs, "lead", x) <= b
+        thinner = carm.transmitted_fraction(inputs, "lead", x - 1e-5)
+        assert thinner > carm.transmitted_fraction(inputs, "lead", x)
 
 
 def test_no_shielding_is_required_when_transmission_is_already_met():

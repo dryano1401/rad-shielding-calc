@@ -371,24 +371,39 @@ def leakage_transmission(inputs: CArmInputs, material: str, thickness_mm: float)
     return math.exp(-alpha * thickness_mm)
 
 
+def _mix(inputs: CArmInputs, material: str) -> tuple[float, float, ArcherParams]:
+    """The kerma split and the fit that attenuates it, resolved once.
+
+    Both are invariant in thickness, so the iterative solve below resolves them
+    here rather than re-deriving the scatter fraction and re-reading the Archer
+    table on every step.
+    """
+    scatter, leakage, _, _ = unshielded_kerma(inputs)
+    return scatter, leakage, tables.primary_archer_by_kvp(inputs.kvp, material)
+
+
+def _transmitted(scatter: float, leakage: float, params: ArcherParams, x: float) -> float:
+    """Summed component transmission at thickness ``x``, from resolved terms."""
+    total = scatter + leakage
+    if total <= 0:
+        return 1.0
+    return (
+        scatter * transmission(params, x) + leakage * math.exp(-params.alpha * x)
+    ) / total
+
+
 def transmitted_fraction(inputs: CArmInputs, material: str, thickness_mm: float) -> float:
     """Fraction of the unshielded secondary kerma passing ``thickness_mm``.
 
     The two components are attenuated by their own transmissions and summed,
     per Equation C.16 restricted to the secondary terms.
     """
-    scatter, leakage, _, _ = unshielded_kerma(inputs)
-    total = scatter + leakage
-    if total <= 0:
-        return 1.0
-    return (
-        scatter * scatter_transmission(inputs, material, thickness_mm)
-        + leakage * leakage_transmission(inputs, material, thickness_mm)
-    ) / total
+    scatter, leakage, params = _mix(inputs, material)
+    return _transmitted(scatter, leakage, params, thickness_mm)
 
 
 def thickness_for_transmission(
-    inputs: CArmInputs, material: str, b: float, *, tolerance: float = 1e-9
+    inputs: CArmInputs, material: str, b: float, *, tolerance: float = 1e-6
 ) -> float:
     """Thickness in mm whose summed component transmission is ``b``.
 
@@ -397,16 +412,23 @@ def thickness_for_transmission(
     is used rather than the report's exponential interpolation because the
     bracket is cheap to establish and the result is then exact to the
     tolerance rather than to the shape assumption.
+
+    The tolerance is a nanometre of lead -- far below anything orderable, and
+    well inside the fits' own accuracy -- so it is a stopping rule rather than
+    a claim about precision.
     """
     if not math.isfinite(b) or b >= 1.0:
         return 0.0
     if b <= 0.0:
         raise ValueError("required transmission must be positive")
 
-    low = 0.0
-    high = 1.0
+    scatter, leakage, params = _mix(inputs, material)
+    if scatter + leakage <= 0:
+        return 0.0
+
+    low, high = 0.0, 1.0
     for _ in range(200):
-        if transmitted_fraction(inputs, material, high) <= b:
+        if _transmitted(scatter, leakage, params, high) <= b:
             break
         high *= 2.0
     else:  # pragma: no cover - only reachable for a non-attenuating material
@@ -414,7 +436,7 @@ def thickness_for_transmission(
 
     while high - low > tolerance:
         mid = 0.5 * (low + high)
-        if transmitted_fraction(inputs, material, mid) > b:
+        if _transmitted(scatter, leakage, params, mid) > b:
             low = mid
         else:
             high = mid

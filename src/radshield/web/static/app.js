@@ -1426,8 +1426,7 @@ function renderFloors() {
             : 'not set — needed for cross-floor distances'}</div>`;
 
     div.querySelector('[data-act=view]').onclick = () => {
-      state.floorId = floor.id;
-      fitToView();
+      setFloor(floor.id, { alwaysFit: true });
       renderAll();
     };
     div.querySelector('[data-act=delete]').onclick = async () => {
@@ -1456,10 +1455,8 @@ function renderFloorSelect() {
     select.appendChild(option);
   }
   select.onchange = () => {
-    state.floorId = select.value;
-    fitToView();
+    setFloor(select.value, { alwaysFit: true });
     renderAll();
-    if (state.worstCase) refreshExposure();
   };
 }
 
@@ -1507,7 +1504,7 @@ function pointRow(kind, id, name, where) {
     const item = kind === 'poi'
       ? state.project.pois.find(p => p.id === id)
       : state.project.sources.find(s => s.id === id);
-    if (item.floor_id !== state.floorId) { state.floorId = item.floor_id; fitToView(); }
+    setFloor(item.floor_id);
     select({ kind, id });
     renderFloors();
     renderFloorSelect();
@@ -2228,9 +2225,32 @@ document.getElementById('wall-opacity').oninput = event => {
   state.wallOpacity = parseFloat(event.target.value);
   draw();
 };
+// Every floor switch goes through here.  The worst-case overlay is solved for
+// one floor and drawn only when its floor_id matches the one on screen, so a
+// switch that forgets to re-solve it leaves the checkbox ticked with nothing
+// drawn -- which reads as the overlay not supporting that floor rather than as
+// a stale fetch.  Funnelling the switch is what keeps that from coming back.
+function setFloor(id, { alwaysFit = false } = {}) {
+  const changed = id !== state.floorId;
+  state.floorId = id;
+  // Selecting a point on the floor already shown must not yank the view back
+  // to a full-page fit, so refitting is tied to an actual change unless the
+  // caller is an explicit "show me this floor" control.
+  if (changed || alwaysFit) fitToView();
+  if (changed && state.worstCase) refreshExposure();
+  return changed;
+}
+
 // The map is a few thousand full point solves, so it is fetched once per
 // floor and kept until something that would move it changes.
+let exposureRequest = 0;
 async function refreshExposure() {
+  // Each solve is seconds of work, so switching floors while one is in flight
+  // leaves two outstanding. Without a sequence number the slower reply wins
+  // whichever floor it was for, and the overlay ends up showing a floor you
+  // are no longer on -- or vanishing, since drawExposure only draws a map
+  // whose floor_id matches. A superseded reply is dropped instead.
+  const ticket = ++exposureRequest;
   if (!state.worstCase || !state.floorId) {
     state.exposure = null;
     state.exposureTile = null;
@@ -2239,7 +2259,9 @@ async function refreshExposure() {
   }
   setStatus('Solving the worst-case grid…');
   try {
-    state.exposure = await api(`/api/exposure?floor_id=${state.floorId}`);
+    const map = await api(`/api/exposure?floor_id=${state.floorId}`);
+    if (ticket !== exposureRequest) return;
+    state.exposure = map;
     buildExposureTile();
     const worst = state.exposure.ratios
       .flat().filter(v => v !== null).reduce((a, b) => Math.max(a, b), 0);
@@ -2250,6 +2272,7 @@ async function refreshExposure() {
         + `everything green cannot exceed the goal at full occupancy.`
       : (state.exposure.warnings[0] || 'Nothing to map on this floor.'));
   } catch (error) {
+    if (ticket !== exposureRequest) return;
     state.exposure = null;
     state.exposureTile = null;
     setStatus(`Worst-case map failed: ${error.message}`);
