@@ -28,6 +28,11 @@ const state = {
   nuclideDefault511: null,  // Archer fit new isotopes prefill from, per material
   wallOpacity: 0.75,        // view-only: how solid drawn walls render, e.g. for a screenshot
   shieldingView: false,     // view-only: colour every wall by its thickness, for a report figure
+  worstCase: false,         // view-only: the worst-case exposure overlay
+  worstCaseGoal: 'uncontrolled',   // which design goal the overlay is read against
+  worstCaseTrial: '',       // "<material>|<mm>" hypothetical barrier, or '' for none
+  exposure: null,           // /api/exposure payload for the floor being viewed
+  exposureTile: null,       // the overlay rasterised once, redrawn on every pan
   elevation: null,          // /api/elevation payload for the dialog's current source/point pair
   elevationShowGrid: false, // debug overlay of the source's elevation chart grid, in the cross-section
 };
@@ -60,6 +65,9 @@ function setProject(data) {
     fitToView();
   }
   renderAll();
+  // A stale exposure map is worse than none: it would show cleared regions
+  // for geometry that has since moved.
+  if (state.worstCase) refreshExposure();
 }
 
 /* ----------------------------------------------------------------- units */
@@ -85,6 +93,17 @@ const SHIELDING_COLOUR = [
 // thickness -- a lead sheet is far too thin to see at any useful zoom, and
 // here the colour carries the thickness instead of the line width.
 const SHIELDING_VIEW_WIDTH_M = 0.060;
+
+// Worst-case overlay bands, most severe first. Banded rather than a continuous
+// ramp on purpose: the overlay exists to sort the floor into "must look at"
+// and "can be set aside", and a band edge is a decision a legend can state,
+// where a gradient is only an impression.
+const EXPOSURE_BANDS = [
+  { from: 10, rgb: [176, 0, 32], label: '10× goal and above' },
+  { from: 1, rgb: [255, 45, 45], label: 'over the goal — needs a point' },
+  { from: 2 / 3, rgb: [255, 180, 40], label: 'within ⅔ of the goal — little headroom' },
+  { from: 0, rgb: [40, 190, 110], label: 'clear — cannot exceed the goal here' },
+];
 
 const thicknessKey = mm => mm.toFixed(3);
 
@@ -405,18 +424,105 @@ function draw() {
       drawPoints(other, 0.28, floorTransform(other, floor));
     }
   }
+  drawExposure(floor);
   drawWalls(floor);
   drawLinks(floor);
   drawMeasurements(floor);
   drawPoints(floor, 1);
   drawCalibration(floor);
   drawChartGridDebug(floor);
-  drawShieldingLegend();
+  drawShieldingLegend(drawExposureLegend());
+}
+
+// The grid is rasterised once into an offscreen tile and then drawn like the
+// floor image, so panning and zooming cost one drawImage rather than tens of
+// thousands of rectangles.
+function buildExposureTile() {
+  const map = state.exposure;
+  if (!map || !map.columns || !map.rows) { state.exposureTile = null; return; }
+  const tile = document.createElement('canvas');
+  tile.width = map.columns;
+  tile.height = map.rows;
+  const image = tile.getContext('2d').createImageData(map.columns, map.rows);
+  for (let row = 0; row < map.rows; row++) {
+    for (let column = 0; column < map.columns; column++) {
+      const ratio = map.ratios[row][column];
+      const at = (row * map.columns + column) * 4;
+      if (ratio === null || ratio === undefined) continue;   // gap, left clear
+      const band = EXPOSURE_BANDS.find(b => ratio >= b.from) || EXPOSURE_BANDS[EXPOSURE_BANDS.length - 1];
+      image.data[at] = band.rgb[0];
+      image.data[at + 1] = band.rgb[1];
+      image.data[at + 2] = band.rgb[2];
+      image.data[at + 3] = 255;
+    }
+  }
+  tile.getContext('2d').putImageData(image, 0, 0);
+  state.exposureTile = tile;
+}
+
+function drawExposure(floor) {
+  const map = state.exposure;
+  if (!state.worstCase || !map || map.floor_id !== floor.id || !state.exposureTile) return;
+  ctx.save();
+  ctx.translate(state.view.x, state.view.y);
+  ctx.scale(state.view.scale, state.view.scale);
+  ctx.globalAlpha = 0.45;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(state.exposureTile, 0, 0,
+    map.columns * map.step * RENDER_ZOOM, map.rows * map.step * RENDER_ZOOM);
+  ctx.restore();
+}
+
+// Returns the y a following legend should start at, so the two stack rather
+// than overlap when both overlays are on.
+function drawExposureLegend() {
+  const map = state.exposure;
+  if (!state.worstCase || !map || !map.columns) return 12;
+
+  ctx.save();
+  ctx.font = '12px system-ui';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const trialLine = map.trial_material
+    ? `assuming ${map.trial_material} ${map.trial_thickness_mm} mm on every path`
+    : '';
+  const labels = EXPOSURE_BANDS.map(b => b.label);
+  ctx.font = '10px system-ui';
+  const trialWidth = trialLine ? ctx.measureText(trialLine).width + 24 : 0;
+  ctx.font = '12px system-ui';
+  const width = Math.max(
+    Math.max(...labels.map(l => ctx.measureText(l).width)) + 62, trialWidth);
+  const height = EXPOSURE_BANDS.length * 21 + 46 + (trialLine ? 14 : 0);
+  ctx.fillStyle = 'rgba(10,12,16,.9)';
+  ctx.strokeStyle = '#3a4152';
+  ctx.lineWidth = 1;
+  ctx.fillRect(12, 12, width, height);
+  ctx.strokeRect(12, 12, width, height);
+
+  ctx.fillStyle = '#e6e9ef';
+  ctx.fillText('Worst case, fraction of goal', 24, 30);
+  ctx.fillStyle = '#96a0b1';
+  ctx.font = '10px system-ui';
+  ctx.fillText(`T = 1, ${map.area_class}, ${map.height_m} m above floor`, 24, 46);
+  if (trialLine) ctx.fillText(trialLine, 24, 60);
+  ctx.font = '12px system-ui';
+  const bandTop = 64 + (trialLine ? 14 : 0);
+  EXPOSURE_BANDS.forEach((band, index) => {
+    const y = bandTop + index * 21;
+    ctx.fillStyle = `rgb(${band.rgb.join(',')})`;
+    ctx.fillRect(24, y - 7, 28, 14);
+    ctx.strokeStyle = '#101319';
+    ctx.strokeRect(24, y - 7, 28, 14);
+    ctx.fillStyle = '#e6e9ef';
+    ctx.fillText(band.label, 62, y);
+  });
+  ctx.restore();
+  return 12 + height + 8;
 }
 
 // Colour only means something with a key beside it, so the shielding view
 // carries its own legend into whatever screenshot is taken of it.
-function drawShieldingLegend() {
+function drawShieldingLegend(topY = 12) {
   if (!state.shieldingView) return;
   const entries = [...shieldingColours().values()];
   if (!entries.length) return;
@@ -431,14 +537,14 @@ function drawShieldingLegend() {
   ctx.fillStyle = 'rgba(10,12,16,.9)';
   ctx.strokeStyle = '#3a4152';
   ctx.lineWidth = 1;
-  ctx.fillRect(12, 12, width, height);
-  ctx.strokeRect(12, 12, width, height);
+  ctx.fillRect(12, topY, width, height);
+  ctx.strokeRect(12, topY, width, height);
 
   ctx.fillStyle = '#e6e9ef';
-  ctx.fillText('Shielding required', 24, 30);
+  ctx.fillText('Shielding required', 24, topY + 18);
   ctx.lineCap = 'round';
   entries.forEach((entry, index) => {
-    const y = 48 + index * 21;
+    const y = topY + 36 + index * 21;
     for (const [colour, lineWidth] of [['#101319', 11], [entry.colour, 7]]) {
       ctx.strokeStyle = colour;
       ctx.lineWidth = lineWidth;
@@ -1331,8 +1437,7 @@ function renderFloors() {
             : 'not set — needed for cross-floor distances'}</div>`;
 
     div.querySelector('[data-act=view]').onclick = () => {
-      state.floorId = floor.id;
-      fitToView();
+      setFloor(floor.id, { alwaysFit: true });
       renderAll();
     };
     div.querySelector('[data-act=delete]').onclick = async () => {
@@ -1360,7 +1465,10 @@ function renderFloorSelect() {
     option.selected = floor.id === state.floorId;
     select.appendChild(option);
   }
-  select.onchange = () => { state.floorId = select.value; fitToView(); renderAll(); };
+  select.onchange = () => {
+    setFloor(select.value, { alwaysFit: true });
+    renderAll();
+  };
 }
 
 function renderMaterials() {
@@ -1407,7 +1515,7 @@ function pointRow(kind, id, name, where) {
     const item = kind === 'poi'
       ? state.project.pois.find(p => p.id === id)
       : state.project.sources.find(s => s.id === id);
-    if (item.floor_id !== state.floorId) { state.floorId = item.floor_id; fitToView(); }
+    setFloor(item.floor_id);
     select({ kind, id });
     renderFloors();
     renderFloorSelect();
@@ -1620,12 +1728,63 @@ function renderSourceInspector(title, box) {
         <option value="tg108" ${source.method === 'tg108' ? 'selected' : ''}>TG-108 nuclear medicine</option>
         <option value="ncrp147" ${source.method === 'ncrp147' ? 'selected' : ''}>NCRP 147 x-ray / fluoroscopy</option>
         <option value="ncrp147_ct" ${source.method === 'ncrp147_ct' ? 'selected' : ''}>NCRP 147 CT</option>
+        <option value="carm" ${source.method === 'carm' ? 'selected' : ''}>NCRP 147 C-arm (KAP)</option>
       </select>
     </div>
     <div class="field">Height above floor (m)
       <input type="number" step="0.1" value="${source.height_above_floor_m}" data-p="height_above_floor_m">
     </div>
     ${source.method === 'tg108' ? renderIsotopes(source) + `
+    ` : source.method === 'carm' ? `
+      <p class="hint">The image receptor is the primary-beam stop, so every barrier is
+        evaluated from scatter plus tube-housing leakage. There is no primary term.
+        Place the source at the patient/scatter centre.</p>
+      <div class="field">Maximum kVp<input type="number" step="1" value="${p.kvp ?? 100}" data-k="kvp"></div>
+      <div class="field">Weekly KAP (mGy·cm²/week)
+        <input type="number" step="any"
+               value="${p.kap_week_mGy_cm2 ?? (p.kap_week_uGy_cm2 != null ? p.kap_week_uGy_cm2 / 1000 : '')}"
+               data-k="kap_week_mGy_cm2"></div>
+      <p class="hint">1 Gy·cm² = 1000 mGy·cm². A general-surgery C-arm runs roughly
+        400 000–800 000 mGy·cm²/week by NCRP 147's R&amp;F fluoroscopy workload; a hybrid
+        room doing endovascular work is several times that. Read it off the unit's dose
+        log where you can.</p>
+      <div class="field">Scattering angle (degrees)
+        <input type="number" step="5" value="${p.scatter_angle_deg ?? 135}" data-k="scatter_angle_deg"></div>
+      <p class="hint">From the primary beam axis to the protected area. NCRP 147 tabulates
+        90° (side-scatter) and 135° (forward- and backscatter); 135° is the more
+        conservative of the two, and a rotating gantry rarely fixes the angle. The scatter
+        fraction is lowest near 69°, so dropping below 90° needs a reason.</p>
+      <div class="field">Scatter fraction a₁ (per cm² at 1 m)
+        <input type="number" step="any" placeholder="NCRP 147 Figure C.1 fit"
+               value="${p.scatter_fraction ?? ''}" data-k="scatter_fraction"></div>
+      <p class="hint">Blank uses the polynomial printed in NCRP 147 Figure C.1 for
+        tungsten-anode beams, valid 50–150 kVp and 20–140°. Enter a value only to override
+        it with the equipment's own scatter data.</p>
+      <div class="row">
+        <label>Field area (cm²)<input type="number" step="any" value="${p.field_area_cm2 ?? 900}" data-k="field_area_cm2"></label>
+        <label>at distance (m)<input type="number" step="any" value="${p.field_distance_m ?? 1}" data-k="field_distance_m"></label>
+      </div>
+      <p class="hint">Used only to convert KAP into the primary air kerma at 1 m, which
+        drives the leakage term — it cancels out of the scatter term.</p>
+      <div class="field">Housing leakage fraction
+        <input type="number" step="any" placeholder="NCRP 147 Eq. C.6–C.8"
+               value="${p.leakage_fraction ?? ''}" data-k="leakage_fraction"></div>
+      <p class="hint">Blank derives leakage from the 0.876 mGy/h regulatory cap at 1 m,
+        scaled by kVp² and the 2.32 mm housing transmission — about 2×10⁻⁴ of the primary
+        at 100 kVp, 4.5×10⁻⁴ at 150 kVp, and negligible below 100 kVp. Enter a fraction
+        only to override it with a vendor figure quoted that way.</p>
+      <div class="field">Measured leakage at 1 m (µGy/week)
+        <input type="number" step="any" placeholder="optional, overrides both"
+               value="${p.leakage_at_1m_uGy_week ?? ''}" data-k="leakage_at_1m_uGy_week"></div>
+      <div class="field">Tube distance offset (m)
+        <input type="number" step="0.1" value="${p.leakage_distance_offset_m ?? 0}" data-k="leakage_distance_offset_m"></div>
+      <p class="hint">Added to the geometric distance for the leakage term only. Zero puts
+        the focal spot at the scatter centre, which is the conservative reading when the
+        tube is actually further from the point.</p>
+      <div class="field">Scatter multiplier
+        <input type="number" step="0.05" value="${p.scatter_multiplier ?? 1}" data-k="scatter_multiplier"></div>
+      <div class="field">Source of the scatter data
+        <input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
     ` : source.method === 'ncrp147' ? `
       <div class="field">Workload distribution<select data-k="workload">${workloadOptions}</select></div>
       <div class="field">Barrier type
@@ -1973,7 +2132,9 @@ async function calculate() {
     <th class="num">Distance (m)</th>
     <th class="num">Unshielded</th><th class="num">Shielded</th><th class="num">B</th>
     <th class="num">% of P/T</th>
-    ${materials.map(m => `<th class="num">${m} (mm)</th>`).join('')}
+    ${materials.map(m => `<th class="num" title="Thickness of ${m} to add to this path, `
+      + `beyond the barriers already drawn on it. Zero means what is drawn is already enough.">`
+      + `${m} to add (mm)</th>`).join('')}
     <th>Status</th></tr></thead><tbody>`;
 
   for (const result of payload.results) {
@@ -2013,7 +2174,12 @@ async function calculate() {
           : `${pctOfGoal.toFixed(1)}%`}</td>
         ${materials.map(m => method.unavailable?.[m]
           ? `<td class="num" title="${escapeHtml(method.unavailable[m])}">—</td>`
-          : `<td class="num">${(method.thickness_mm[m] ?? 0).toFixed(2)}</td>`).join('')}
+          : (method.thickness_mm[m] ?? 0) > 0
+            ? `<td class="num">${method.thickness_mm[m].toFixed(2)}</td>`
+            // A column of 0.00 reads as a broken column rather than as the
+            // answer "what is already drawn is enough", which is the usual
+            // result on a path that crosses a lead-lined wall.
+            : `<td class="num muted" title="already under the goal on this path">none</td>`).join('')}
         <td>${transmission > 1
           ? '<span class="tag ok">none needed</span>'
           : '<span class="tag need">shielding</span>'}</td></tr>`;
@@ -2077,6 +2243,93 @@ document.getElementById('wall-opacity').oninput = event => {
   state.wallOpacity = parseFloat(event.target.value);
   draw();
 };
+// Every floor switch goes through here.  The worst-case overlay is solved for
+// one floor and drawn only when its floor_id matches the one on screen, so a
+// switch that forgets to re-solve it leaves the checkbox ticked with nothing
+// drawn -- which reads as the overlay not supporting that floor rather than as
+// a stale fetch.  Funnelling the switch is what keeps that from coming back.
+function setFloor(id, { alwaysFit = false } = {}) {
+  const changed = id !== state.floorId;
+  state.floorId = id;
+  // Selecting a point on the floor already shown must not yank the view back
+  // to a full-page fit, so refitting is tied to an actual change unless the
+  // caller is an explicit "show me this floor" control.
+  if (changed || alwaysFit) fitToView();
+  if (changed && state.worstCase) refreshExposure();
+  return changed;
+}
+
+// The map is a few thousand full point solves, so it is fetched once per
+// floor and kept until something that would move it changes.
+let exposureRequest = 0;
+async function refreshExposure() {
+  // Each solve is seconds of work, so switching floors while one is in flight
+  // leaves two outstanding. Without a sequence number the slower reply wins
+  // whichever floor it was for, and the overlay ends up showing a floor you
+  // are no longer on -- or vanishing, since drawExposure only draws a map
+  // whose floor_id matches. A superseded reply is dropped instead.
+  const ticket = ++exposureRequest;
+  if (!state.worstCase || !state.floorId) {
+    state.exposure = null;
+    state.exposureTile = null;
+    draw();
+    return;
+  }
+  setStatus('Solving the worst-case grid…');
+  try {
+    const [trialMaterial, trialMm] = state.worstCaseTrial
+      ? state.worstCaseTrial.split('|') : ['', 0];
+    const query = new URLSearchParams({
+      floor_id: state.floorId,
+      area_class: state.worstCaseGoal,
+      trial_material: trialMaterial,
+      trial_thickness_mm: trialMm,
+    });
+    const map = await api(`/api/exposure?${query}`);
+    if (ticket !== exposureRequest) return;
+    state.exposure = map;
+    buildExposureTile();
+    const worst = state.exposure.ratios
+      .flat().filter(v => v !== null).reduce((a, b) => Math.max(a, b), 0);
+    const over = state.exposure.ratios.flat().filter(v => v !== null && v >= 1).length;
+    const solved = state.exposure.ratios.flat().filter(v => v !== null).length;
+    const trial = state.exposure.trial_material
+      ? ` assuming ${state.exposure.trial_material} `
+        + `${state.exposure.trial_thickness_mm} mm on every path,`
+      : '';
+    setStatus(solved
+      ? `Worst case${trial} ${state.exposure.area_class} goal: ${over} of ${solved} cells `
+        + `over goal, peak ${worst.toPrecision(3)}× — everything green cannot exceed `
+        + `the goal at full occupancy.`
+      : (state.exposure.warnings[0] || 'Nothing to map on this floor.'));
+  } catch (error) {
+    if (ticket !== exposureRequest) return;
+    state.exposure = null;
+    state.exposureTile = null;
+    setStatus(`Worst-case map failed: ${error.message}`);
+  }
+  draw();
+}
+
+document.getElementById('worst-case').onchange = event => {
+  state.worstCase = event.target.checked;
+  // The two qualifiers are meaningless with the overlay off, and leaving them
+  // on screen invites reading a stale map against a setting it never used.
+  document.getElementById('worst-case-goal-wrap').hidden = !state.worstCase;
+  document.getElementById('worst-case-trial-wrap').hidden = !state.worstCase;
+  refreshExposure();
+};
+
+document.getElementById('worst-case-goal').onchange = event => {
+  state.worstCaseGoal = event.target.value;
+  refreshExposure();
+};
+
+document.getElementById('worst-case-trial').onchange = event => {
+  state.worstCaseTrial = event.target.value;
+  refreshExposure();
+};
+
 document.getElementById('shielding-view').onchange = event => {
   state.shieldingView = event.target.checked;
   document.getElementById('wall-opacity').disabled = state.shieldingView;

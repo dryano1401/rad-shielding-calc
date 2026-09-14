@@ -633,6 +633,21 @@ def path_barriers(
             )
         )
 
+    # The screening overlay's hypothetical barrier, applied last so it stacks
+    # on whatever the drawing already provides rather than replacing it.  It
+    # goes in here, where both methodologies assemble their paths, so neither
+    # can be given it without the other.
+    trial = getattr(project, "trial_barrier", None)
+    if trial is not None and trial.thickness_mm > 0:
+        crossings.append(
+            Crossing(
+                material=trial.material,
+                thickness_mm=trial.thickness_mm,
+                effective_thickness_mm=trial.thickness_mm,
+                label=f"trial {trial.material} {trial.thickness_mm:g} mm",
+            )
+        )
+
     return crossings, warnings
 
 

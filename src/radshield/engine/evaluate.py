@@ -35,6 +35,7 @@ from ..physics.archer import thickness as archer_thickness
 from ..physics.archer import transmission as archer_transmission
 from ..physics.limits import ncrp147_goal, tg108_goal
 from ..physics.ncrp147 import barriers as ncrp_barriers
+from ..physics.ncrp147 import carm as ncrp_carm
 from ..physics.ncrp147 import ct as ncrp_ct
 from ..physics.ncrp147 import tables as ncrp_tables
 
@@ -182,6 +183,49 @@ def _ct_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_ct.CT
         if scatter.method == "dlp"
         else None,
         kvp=float(p.get("kvp", 125)),
+        label=source.label or source.id,
+    )
+
+
+def _carm_kap_mGy_cm2(params: dict[str, Any]) -> float:
+    """Weekly KAP in mGy cm2, migrating the microgray key projects were saved with.
+
+    The field was originally stored as uGy cm2, which forced entry of a number
+    like 7.3e8 for a typical room.  Dropping the old key would read a saved
+    project as zero KAP and report that no shielding is required, so it is
+    converted rather than ignored.
+    """
+    if params.get("kap_week_mGy_cm2") is not None:
+        return float(params["kap_week_mGy_cm2"] or 0.0)
+    return float(params.get("kap_week_uGy_cm2", 0.0) or 0.0) / 1000.0
+
+
+def _carm_inputs(source: SourcePoint, dist: float, occupancy: float) -> ncrp_carm.CArmInputs:
+    """Build C-arm barrier inputs from the stored parameters.
+
+    The placed source point is the patient/scatter centre, so the geometric
+    distance is dS.  A C-arm's focal spot sits within about a metre of that,
+    and which of the two is nearer the point depends on the gantry angle, so
+    dL defaults to dS and an offset is available where the difference is
+    known and matters.
+    """
+    p = source.params
+    offset = float(p.get("leakage_distance_offset_m", 0.0) or 0.0)
+    return ncrp_carm.CArmInputs(
+        kvp=float(p.get("kvp", 100)),
+        kap_week_mGy_cm2=_carm_kap_mGy_cm2(p),
+        scatter_distance_m=dist,
+        leakage_distance_m=max(dist + offset, 1e-6),
+        occupancy=occupancy,
+        scatter_angle_deg=float(
+            p.get("scatter_angle_deg", ncrp_carm.DEFAULT_SCATTER_ANGLE_DEG)
+        ),
+        scatter_fraction=_optional_float(p.get("scatter_fraction")),
+        leakage_fraction=_optional_float(p.get("leakage_fraction")),
+        leakage_at_1m_uGy_week=_optional_float(p.get("leakage_at_1m_uGy_week")),
+        field_area_cm2=float(p.get("field_area_cm2", 900.0)),
+        field_distance_m=float(p.get("field_distance_m", 1.0)),
+        scatter_multiplier=float(p.get("scatter_multiplier", 1.0)),
         label=source.label or source.id,
     )
 
@@ -495,12 +539,20 @@ def _solve_ncrp147(
 ) -> tuple[MethodResult, list[SourceContribution]]:
     """Attenuate each NCRP 147 source by its own path, sum, then solve."""
     goal = ncrp147_goal(poi.area_class)
-    evaluated: list[tuple[Any, bool]] = []
+    # Each entry is the evaluated barrier plus the function that turns a
+    # required transmission into a thickness for it -- carried together so the
+    # three NCRP families stay dispatched in one place rather than by repeated
+    # method tests further down.
+    evaluated: list[tuple[Any, Any]] = []
     contributions: list[SourceContribution] = []
 
     for src, dist in pairs:
-        is_ct = src.method == "ncrp147_ct"
-        if is_ct:
+        if src.method == "carm":
+            inputs = _carm_inputs(src, dist.metres, poi.occupancy)
+            res = ncrp_carm.evaluate(inputs, goal)
+            params_for = lambda material, i=inputs: ncrp_carm.barrier_params(i, material)
+            thickness_for = _carm_thickness_for
+        elif src.method == "ncrp147_ct":
             inputs = _ct_inputs(src, dist.metres, poi.occupancy)
             if inputs.scatter.method == "chart":
                 kerma, chart_notes = _read_chart(project, src, poi, dist.metres)
@@ -516,11 +568,13 @@ def _solve_ncrp147(
             else:
                 res = ncrp_ct.evaluate(inputs, goal)
             params_for = lambda material, i=inputs: ncrp_ct.barrier_params(i, material)
+            thickness_for = _ct_thickness_for
         else:
             inputs = _ncrp_inputs(src, dist.metres, poi.occupancy)
             res = ncrp_barriers.evaluate(inputs, goal)
             params_for = lambda material, i=inputs: ncrp_barriers.barrier_params(i, material)
-        evaluated.append((res, is_ct))
+            thickness_for = _thickness_for
+        evaluated.append((res, thickness_for))
 
         crossings, geometry_warnings = path_barriers(
             project, src, poi, apply_obliquity=project.apply_obliquity
@@ -569,10 +623,8 @@ def _solve_ncrp147(
             continue
         try:
             candidates = [
-                _ct_thickness_for(res, material, b_required)
-                if is_ct
-                else _thickness_for(res, material, b_required)
-                for res, is_ct in evaluated
+                thickness_for(res, material, b_required)
+                for res, thickness_for in evaluated
             ]
         except ncrp_tables.TableLookupError as exc:
             unavailable[material] = str(exc)
@@ -605,6 +657,8 @@ def _params_for_ncrp_source(source: SourcePoint, material: str) -> Any:
     """
     if source.method == "ncrp147_ct":
         return ncrp_ct.barrier_params(_ct_inputs(source, 1.0, 1.0), material)
+    if source.method == "carm":
+        return ncrp_carm.barrier_params(_carm_inputs(source, 1.0, 1.0), material)
     return ncrp_barriers.barrier_params(_ncrp_inputs(source, 1.0, 1.0), material)
 
 
@@ -771,6 +825,16 @@ def _ct_thickness_for(result: ncrp_ct.CTBarrierResult, material: str, b: float) 
     return archer_thickness(ncrp_ct.barrier_params(result.inputs, material), b)
 
 
+def _carm_thickness_for(result: ncrp_carm.CArmResult, material: str, b: float) -> float:
+    """Thickness in mm for one evaluated C-arm barrier at transmission ``b``.
+
+    Solved by iteration rather than by inverting one Archer fit: scatter and
+    leakage carry different transmissions for a C-arm, so NCRP 147 Section C.4
+    applies rather than the single-curve algebra of Equation C.15.
+    """
+    return ncrp_carm.thickness_for_transmission(result.inputs, material, b)
+
+
 def evaluate_point(project: Project, poi: PointOfInterest) -> PointResult:
     """Evaluate one point of interest against every source linked to it."""
     floor = project.floor(poi.floor_id)
@@ -896,6 +960,19 @@ def reference_dose(project: Project, source: SourcePoint) -> dict[str, Any]:
             return result
 
         goal = ncrp147_goal("uncontrolled")
+        if source.method == "carm":
+            inputs = _carm_inputs(source, 1.0, 1.0)
+            scatter, leakage, _, notes = ncrp_carm.unshielded_kerma(inputs)
+            return {
+                "value": scatter + leakage,
+                "unit": "mGy/week",
+                "note": f"unshielded at 1 m: scatter {scatter:.4g} + leakage {leakage:.4g}",
+                "components": [
+                    {"label": "scatter", "value": scatter, "unit": "mGy/week"},
+                    {"label": "leakage", "value": leakage, "unit": "mGy/week"},
+                ],
+            }
+
         if source.method == "ncrp147_ct":
             inputs = _ct_inputs(source, 1.0, 1.0)
             if inputs.scatter.method == "chart":
@@ -1091,7 +1168,7 @@ def results_to_rows(results: list[PointResult], materials: list[str]) -> list[di
                 ),
             )
             for material in materials:
-                row[f"{material}_mm_required"] = round(
+                row[f"{material}_mm_to_add"] = round(
                     res.governing_thickness_mm.get(material, 0.0), 3
                 )
 

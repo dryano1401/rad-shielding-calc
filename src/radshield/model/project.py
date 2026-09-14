@@ -17,7 +17,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-Method = Literal["tg108", "ncrp147", "ncrp147_ct"]
+Method = Literal["tg108", "ncrp147", "ncrp147_ct", "carm"]
 AreaClass = Literal["controlled", "uncontrolled"]
 
 # Metres per unit, for the distance units offered during calibration.
@@ -426,6 +426,23 @@ def _poi_from_dict(raw: dict[str, Any]) -> PointOfInterest:
     return PointOfInterest(**data)
 
 
+@dataclass(frozen=True)
+class TrialBarrier:
+    """A notional barrier applied to every path, for screening only.
+
+    Obliquity is not applied: the barrier has no drawn orientation to be
+    oblique to, and assuming a normal crossing is the thinner, conservative
+    reading of a thickness someone is considering specifying.
+    """
+
+    material: str
+    thickness_mm: float
+
+    def __post_init__(self) -> None:
+        if self.thickness_mm < 0:
+            raise ValueError("a trial barrier cannot be thinner than nothing")
+
+
 @dataclass
 class Project:
     """A complete shielding project."""
@@ -438,6 +455,12 @@ class Project:
     scatter_maps: list[ScatterMapData] = field(default_factory=list)
     display_unit: str = "ft"
     apply_obliquity: bool = False
+    # A hypothetical barrier laid on every path, for asking "what would this
+    # much lead leave hot" without drawing walls.  It is a screening overlay
+    # rather than a property of the design, so it is deliberately not
+    # serialised: a saved project that quietly shielded every placed point
+    # with a barrier nobody built would be a silent, non-conservative error.
+    trial_barrier: TrialBarrier | None = None
     schema_version: int = 1
 
     def floor(self, floor_id: str) -> Floor:
@@ -508,8 +531,14 @@ class Project:
                 elevation += heights_m[index]
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise to plain JSON-compatible types."""
-        return asdict(self)
+        """Serialise to plain JSON-compatible types.
+
+        The trial barrier is left out: it is a screening assumption held for
+        the length of a look at the map, not part of the design being saved.
+        """
+        data = asdict(self)
+        data.pop("trial_barrier", None)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Project:

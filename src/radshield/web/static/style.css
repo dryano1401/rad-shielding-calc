@@ -77,6 +77,11 @@ a#btn-csv, a#btn-report {
 .tool.active { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
 .divider { width: 1px; height: 20px; background: var(--line); }
 .ghost-toggle { color: var(--muted); display: flex; align-items: center; gap: 5px; }
+/* Any class that sets `display` outranks the user agent's [hidden] rule on
+   specificity, which silently makes the hidden attribute do nothing. Stated
+   once here so toggling `el.hidden` works on styled elements too. */
+[hidden] { display: none !important; }
+.muted { color: var(--muted); }
 
 #centre { display: flex; flex-direction: column; min-width: 0; }
 #canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #0b0d11; }
