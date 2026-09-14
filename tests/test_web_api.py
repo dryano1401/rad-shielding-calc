@@ -207,7 +207,7 @@ def test_full_workflow_produces_results_and_csv(client):
     rows = list(csv.DictReader(io.StringIO(response.text)))
     assert len(rows) == 1  # one row per point
     row = rows[0]
-    assert float(row["lead_mm_required"]) > 0
+    assert float(row["lead_mm_to_add"]) > 0
     assert float(row["shielded_dose_rate"]) == pytest.approx(117.0, rel=0.01)
     assert float(row["unshielded_dose_rate"]) == pytest.approx(117.0, rel=0.01)
     # 117 uSv/week against the 20 uSv/week uncontrolled goal, bare -- 100/B.

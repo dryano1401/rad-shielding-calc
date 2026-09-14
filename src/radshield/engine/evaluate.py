@@ -1168,7 +1168,7 @@ def results_to_rows(results: list[PointResult], materials: list[str]) -> list[di
                 ),
             )
             for material in materials:
-                row[f"{material}_mm_required"] = round(
+                row[f"{material}_mm_to_add"] = round(
                     res.governing_thickness_mm.get(material, 0.0), 3
                 )
 

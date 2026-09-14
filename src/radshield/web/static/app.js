@@ -2132,7 +2132,9 @@ async function calculate() {
     <th class="num">Distance (m)</th>
     <th class="num">Unshielded</th><th class="num">Shielded</th><th class="num">B</th>
     <th class="num">% of P/T</th>
-    ${materials.map(m => `<th class="num">${m} (mm)</th>`).join('')}
+    ${materials.map(m => `<th class="num" title="Thickness of ${m} to add to this path, `
+      + `beyond the barriers already drawn on it. Zero means what is drawn is already enough.">`
+      + `${m} to add (mm)</th>`).join('')}
     <th>Status</th></tr></thead><tbody>`;
 
   for (const result of payload.results) {
@@ -2172,7 +2174,12 @@ async function calculate() {
           : `${pctOfGoal.toFixed(1)}%`}</td>
         ${materials.map(m => method.unavailable?.[m]
           ? `<td class="num" title="${escapeHtml(method.unavailable[m])}">—</td>`
-          : `<td class="num">${(method.thickness_mm[m] ?? 0).toFixed(2)}</td>`).join('')}
+          : (method.thickness_mm[m] ?? 0) > 0
+            ? `<td class="num">${method.thickness_mm[m].toFixed(2)}</td>`
+            // A column of 0.00 reads as a broken column rather than as the
+            // answer "what is already drawn is enough", which is the usual
+            // result on a path that crosses a lead-lined wall.
+            : `<td class="num muted" title="already under the goal on this path">none</td>`).join('')}
         <td>${transmission > 1
           ? '<span class="tag ok">none needed</span>'
           : '<span class="tag need">shielding</span>'}</td></tr>`;

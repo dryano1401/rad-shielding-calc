@@ -125,3 +125,42 @@ def test_mapping_does_not_leave_a_trial_barrier_on_the_real_project(project):
     exposure_map(project, "fl1", columns=8,
                  trial_material="Lead", trial_thickness_mm=3.17)
     assert project.trial_barrier is None
+
+
+# --- what a zero in the thickness column means --------------------------
+
+
+def test_a_shielded_path_needs_nothing_added_and_an_unshielded_one_does():
+    """The thickness columns report what to add *beyond* the drawn barriers.
+
+    A wall already carrying enough lead leaves zero to add, which is a result
+    rather than a failure to compute one -- so the two cases are pinned
+    together to keep a real regression distinguishable from that.
+    """
+    from radshield.model.project import Barrier, PointOfInterest
+
+    project = build_project()
+    project.materials = ["lead", "concrete"]
+    project.sources.append(carm())
+
+    def point(poi_id, barriers):
+        poi = PointOfInterest(
+            id=poi_id, floor_id="fl1", x=330.0, y=200.0, auto_height=False,
+            height_above_floor_m=1.0, occupancy=1.0, area_class="uncontrolled",
+            offset_applied=True, linked_source_ids=["src1"],
+            manual_barriers={"src1": barriers} if barriers else {},
+        )
+        from radshield.engine.evaluate import evaluate_point
+        return evaluate_point(project, poi)
+
+    bare = point("bare", [])
+    assert bare.governing_thickness_mm["lead"] > 0
+    assert bare.governing_thickness_mm["concrete"] > 0
+
+    lined = point("lined", [Barrier(material="lead", thickness_mm=3.17, label="1/8 in")])
+    assert lined.governing_thickness_mm["lead"] == 0.0
+    assert lined.governing_thickness_mm["concrete"] == 0.0
+    # Zero because the point is under its goal, not because nothing was solved.
+    governing = lined.methods[-1]
+    assert governing.required_transmission > 1.0
+    assert not governing.unavailable

@@ -81,6 +81,7 @@ a#btn-csv, a#btn-report {
    specificity, which silently makes the hidden attribute do nothing. Stated
    once here so toggling `el.hidden` works on styled elements too. */
 [hidden] { display: none !important; }
+.muted { color: var(--muted); }
 
 #centre { display: flex; flex-direction: column; min-width: 0; }
 #canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #0b0d11; }

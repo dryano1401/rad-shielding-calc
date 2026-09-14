@@ -400,7 +400,7 @@ def test_csv_rows_are_one_per_point_with_the_governing_totals():
     row = rows[0]
     assert row["point"] == "Office"
     assert row["source"] == "Uptake room"
-    assert "lead_mm_required" in row
+    assert "lead_mm_to_add" in row
     assert row["unshielded_dose_rate"] == pytest.approx(117.0, rel=0.01)
     assert row["shielded_dose_rate"] == pytest.approx(117.0, rel=0.01)
     assert row["goal_P"] == pytest.approx(20.0, rel=0.01)
