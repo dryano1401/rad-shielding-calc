@@ -34,6 +34,13 @@ python -m radshield.web        # opens http://127.0.0.1:8000/
 `radshield.physics` has no dependencies at all; FastAPI and PyMuPDF are only
 needed for the GUI.
 
+On Windows with conda, `run.bat` does the whole thing: it activates the
+environment, installs anything missing, starts the server and opens a browser.
+Double-click it, or pass a port — `run.bat 8001` — if 8000 is taken. It
+defaults to an environment named `theradiomics`; edit the one line near the
+top, or set `RADSHIELD_ENV`, to use another. It does not need conda to have
+been initialised for `cmd.exe`.
+
 ## Workflow
 
 1. **Add floors.** Upload one PDF per floor. Set elevations directly, or enter
