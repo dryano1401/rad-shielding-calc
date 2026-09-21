@@ -131,15 +131,20 @@ def index() -> HTMLResponse:
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
-    """Serve an inline icon so browsers stop logging a 404 for it."""
-    svg = (
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
-        "<rect width='32' height='32' rx='6' fill='#12151a'/>"
-        "<circle cx='16' cy='16' r='4' fill='#ff8a3d'/>"
-        "<circle cx='16' cy='16' r='9' fill='none' stroke='#40d0a0' stroke-width='2'/>"
-        "</svg>"
+    """Serve the application icon: the Affinity atom mark on a navy tile.
+
+    A multi-resolution .ico rather than one image, so the browser tab, the
+    bookmark bar and a pinned shortcut each pick the entry drawn for their
+    size -- see ``tools/make_icon.py`` for why those differ.
+    """
+    icon = STATIC_DIR / "favicon.ico"
+    if not icon.exists():  # pragma: no cover - only if package data is missing
+        raise HTTPException(404, "icon not found")
+    return Response(
+        icon.read_bytes(),
+        media_type="image/x-icon",
+        headers={"cache-control": "no-cache"},
     )
-    return Response(svg, media_type="image/svg+xml")
 
 
 @app.get("/api/project")
