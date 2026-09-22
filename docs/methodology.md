@@ -398,6 +398,22 @@ geometry. The resulting leakage-to-primary ratio is 4.5×10⁻⁴ at 150 kVp,
 housing stops a 70 kVp beam almost entirely, which is the report's basis for
 calling the leakage contribution negligible under 100 kVp.
 
+**Working from a manufacturer stray-radiation map instead.** Interventional
+vendors publish isokerma maps normalised to KAP — contours in µGy per Gy·cm²
+around the machine, measured with an ion chamber and a phantom in the beam.
+Those read through the same chart machinery the CT method uses, with a
+workload basis of `Gy cm2` so the weekly total is the weekly KAP rather than a
+procedure count.
+
+Two things change when a map is used rather than the model. A chamber in the
+room records everything arriving at it, so the map **already includes
+tube-housing leakage**: the Equation C.6–C.8 estimate is dropped rather than
+added, or the leakage would be counted twice. And because the reading is a
+mixture of scatter and leakage in unknown proportion, the barrier takes Table
+C.1's combined secondary fit rather than the component-wise treatment below —
+C.1 is derived for exactly that mixture, so here it is the right curve rather
+than the approximation it is for the modelled route.
+
 **Why the components are attenuated separately.** Table C.1's fits are for the
 *combined* secondary transmission, so they bake in a particular
 scatter-to-leakage mix: the one produced by 90° scatter at the Table 4.7 beam

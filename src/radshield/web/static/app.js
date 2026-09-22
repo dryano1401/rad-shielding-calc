@@ -1740,6 +1740,36 @@ function renderSourceInspector(title, box) {
         evaluated from scatter plus tube-housing leakage. There is no primary term.
         Place the source at the patient/scatter centre.</p>
       <div class="field">Maximum kVp<input type="number" step="1" value="${p.kvp ?? 100}" data-k="kvp"></div>
+      <div class="field">Scatter method
+        <select data-k="scatter_method">
+          <option value="model" ${p.scatter_method !== 'chart' ? 'selected' : ''}>NCRP 147 Figure C.1 model</option>
+          <option value="chart" ${p.scatter_method === 'chart' ? 'selected' : ''}>Manufacturer stray-radiation map</option>
+        </select>
+      </div>
+      ${p.scatter_method === 'chart' ? `
+        <div class="field">Plan map
+          <select data-k="plan_map_id">
+            <option value="">none</option>
+            ${(state.project.scatter_maps || []).filter(m => m.plane === 'plan').map(m =>
+              `<option value="${m.id}" ${p.plan_map_id === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">Elevation map (used across floors)
+          <select data-k="elevation_map_id">
+            <option value="">none</option>
+            ${(state.project.scatter_maps || []).filter(m => m.plane === 'elevation').map(m =>
+              `<option value="${m.id}" ${p.elevation_map_id === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">Rotation on the plan (degrees)
+          <input type="number" step="5" value="${source.rotation_deg || 0}" data-p="rotation_deg">
+        </div>
+        <p class="hint">Import the map with its values per <em>Gy·cm² of KAP</em>, which is
+          how interventional vendors normalise them. A measured stray-radiation map already
+          includes tube-housing leakage, so the leakage term below is dropped rather than
+          added to it, and the barrier takes Table C.1's combined secondary fit.</p>
+        <div class="field">Source of the map<input type="text" value="${escapeHtml(p.scatter_source || '')}" data-k="scatter_source"></div>
+      ` : ''}
       <div class="field">Weekly KAP (mGy·cm²/week)
         <input type="number" step="any"
                value="${p.kap_week_mGy_cm2 ?? (p.kap_week_uGy_cm2 != null ? p.kap_week_uGy_cm2 / 1000 : '')}"
@@ -1748,8 +1778,9 @@ function renderSourceInspector(title, box) {
         400 000–800 000 mGy·cm²/week by NCRP 147's R&amp;F fluoroscopy workload; a hybrid
         room doing endovascular work is several times that. Read it off the unit's dose
         log where you can.</p>
+      ${p.scatter_method === 'chart' ? '' : `
       <div class="field">Scattering angle (degrees)
-        <input type="number" step="5" value="${p.scatter_angle_deg ?? 135}" data-k="scatter_angle_deg"></div>
+        <input type="number" step="5" value="${p.scatter_angle_deg ?? 135}" data-k="scatter_angle_deg"></div>`}
       <p class="hint">From the primary beam axis to the protected area. NCRP 147 tabulates
         90° (side-scatter) and 135° (forward- and backscatter); 135° is the more
         conservative of the two, and a rotating gantry rarely fixes the angle. The scatter

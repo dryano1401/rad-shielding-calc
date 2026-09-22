@@ -278,7 +278,7 @@ def _read_chart(
     map_id = elevation_id if use_elevation else plan_id
     if not map_id:
         raise ValueError(
-            "this CT source uses the manufacturer chart method but no chart is assigned"
+            "this source uses the manufacturer chart method but no chart is assigned"
         )
     plane = "elevation" if use_elevation else "plan"
 
@@ -549,9 +549,25 @@ def _solve_ncrp147(
     for src, dist in pairs:
         if src.method == "carm":
             inputs = _carm_inputs(src, dist.metres, poi.occupancy)
-            res = ncrp_carm.evaluate(inputs, goal)
+            if src.params.get("scatter_method") == "chart":
+                kerma, chart_notes = _read_chart(project, src, poi, dist.metres)
+                basis = _chart_basis(project, src)
+                res = ncrp_carm.evaluate_from_chart(
+                    inputs, goal, kerma, chart_notes,
+                    workload_per_week=isodose.weekly_multiplier(
+                        basis, 0.0, 0.0,
+                        kap_week_Gy_cm2=inputs.kap_week_mGy_cm2 / 1000.0,
+                    ),
+                    basis=basis,
+                )
+                # A measured map is a mixture of scatter and leakage in
+                # unknown proportion, which is what Table C.1 is fitted to, so
+                # it is inverted directly instead of being split in two.
+                thickness_for = _carm_chart_thickness_for
+            else:
+                res = ncrp_carm.evaluate(inputs, goal)
+                thickness_for = _carm_thickness_for
             params_for = lambda material, i=inputs: ncrp_carm.barrier_params(i, material)
-            thickness_for = _carm_thickness_for
         elif src.method == "ncrp147_ct":
             inputs = _ct_inputs(src, dist.metres, poi.occupancy)
             if inputs.scatter.method == "chart":
@@ -833,6 +849,18 @@ def _carm_thickness_for(result: ncrp_carm.CArmResult, material: str, b: float) -
     applies rather than the single-curve algebra of Equation C.15.
     """
     return ncrp_carm.thickness_for_transmission(result.inputs, material, b)
+
+
+def _carm_chart_thickness_for(result: ncrp_carm.CArmResult, material: str, b: float) -> float:
+    """Thickness in mm for a C-arm barrier read from a measured stray map.
+
+    One curve rather than two: the map records scatter and leakage together in
+    a proportion nobody knows, and Table C.1's secondary fit is derived for
+    exactly that mixture.
+    """
+    from ..physics.archer import thickness as archer_thickness
+
+    return archer_thickness(ncrp_carm.barrier_params(result.inputs, material), b)
 
 
 def evaluate_point(project: Project, poi: PointOfInterest) -> PointResult:
