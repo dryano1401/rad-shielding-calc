@@ -63,15 +63,25 @@ WORKLOAD_BASIS: dict[str, str] = {
     "scan": "scans per week",
     "mAs": "mAs per week",
     "100 mAs": "mAs per week / 100",
+    # Interventional vendors normalise stray-radiation maps to the air
+    # kerma-area product instead, which makes the map independent of how long
+    # the beam was on: the published value is per Gy cm2 of KAP, so a week of
+    # it is the weekly KAP.
+    "Gy cm2": "weekly KAP in Gy cm2",
 }
 
 
-def weekly_multiplier(per: str, procedures_per_week: float, mas_per_week: float) -> float:
+def weekly_multiplier(
+    per: str,
+    procedures_per_week: float,
+    mas_per_week: float,
+    kap_week_Gy_cm2: float = 0.0,
+) -> float:
     """How many chart-units of workload occur in a week.
 
     A chart quoted per procedure is multiplied by the procedure count; one
-    quoted per mAs is multiplied by the weekly workload, and per 100 mAs by a
-    hundredth of it.
+    quoted per mAs is multiplied by the weekly workload, per 100 mAs by a
+    hundredth of it, and one quoted per Gy cm2 by the weekly KAP.
     """
     if per not in WORKLOAD_BASIS:
         raise IsodoseError(f"unknown chart basis {per!r}; known: {sorted(WORKLOAD_BASIS)}")
@@ -79,6 +89,8 @@ def weekly_multiplier(per: str, procedures_per_week: float, mas_per_week: float)
         return mas_per_week
     if per == "100 mAs":
         return mas_per_week / 100.0
+    if per == "Gy cm2":
+        return kap_week_Gy_cm2
     return procedures_per_week
 
 # Bearings further than this from any cell are reported rather than guessed.

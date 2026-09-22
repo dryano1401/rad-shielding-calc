@@ -443,6 +443,68 @@ def thickness_for_transmission(
     return high
 
 
+def evaluate_from_chart(
+    inputs: CArmInputs,
+    goal: DesignGoal,
+    kerma_per_unit_mGy: float,
+    chart_notes: tuple[str, ...] = (),
+    *,
+    workload_per_week: float,
+    basis: str = "Gy cm2",
+) -> CArmResult:
+    """Barrier requirement from a measured stray-radiation map.
+
+    A vendor isokerma map is made by putting a chamber at points around the
+    machine with a phantom in the beam, so what it records is everything
+    arriving there -- scatter *and* tube-housing leakage together.  The
+    modelled leakage term is therefore dropped rather than added: adding it
+    would count the leakage twice, once as measured and once as estimated.
+    The whole reading is reported as the scatter component for that reason,
+    with leakage zero and a note saying where it went.
+
+    Because the reading is a measured mix of the two in unknown proportion,
+    the barrier for it takes Table C.1's combined secondary fit rather than
+    the component-wise treatment :func:`thickness_for_transmission` applies to
+    the modelled route -- C.1 is derived for exactly that mixture.
+
+    Args:
+        kerma_per_unit_mGy: Chart value at the point, per chart unit.
+        workload_per_week: How many chart units occur in a week; for a
+            KAP-normalised map this is the weekly KAP in Gy cm2.
+        basis: What the chart is quoted per, for the audit trail.
+    """
+    if goal.quantity != "air_kerma":
+        raise ValueError(f"NCRP 147 requires an air-kerma design goal, got {goal.quantity!r}")
+    if kerma_per_unit_mGy < 0:
+        raise ValueError("chart kerma cannot be negative")
+
+    kerma = kerma_per_unit_mGy * workload_per_week
+    b = float("inf") if kerma <= 0 else goal.value / (inputs.occupancy * kerma)
+
+    terms = {
+        f"chart kerma at the point (mGy per {basis})": kerma_per_unit_mGy,
+        f"weekly workload ({basis})": workload_per_week,
+        "occupancy T": inputs.occupancy,
+        "design goal P (mGy/week)": goal.value,
+    }
+    notes = list(chart_notes) + [
+        "the map is measured stray radiation, so it already includes tube-housing "
+        "leakage; the modelled leakage term is dropped rather than added to it",
+        "attenuated with the Table C.1 secondary fit, which is derived for the "
+        "scatter-and-leakage mixture the map records",
+    ]
+    return CArmResult(
+        unshielded_weekly_kerma_mGy=kerma,
+        required_transmission=b,
+        inputs=inputs,
+        goal=goal,
+        scatter_mGy=kerma,
+        leakage_mGy=0.0,
+        terms=terms,
+        notes=tuple(notes),
+    )
+
+
 def barrier_params(inputs: CArmInputs, material: str) -> ArcherParams:
     """A single secondary fit for this source's kVp, for walls along the path.
 
