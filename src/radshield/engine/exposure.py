@@ -191,6 +191,12 @@ def exposure_map(
 
     ratios: list[list[float | None]] = []
     unsolved = 0
+    # A barrier a methodology has no data for is dropped from the path with a
+    # warning, which is conservative but silent: the map simply does not move
+    # when the trial barrier changes, which reads as a broken control rather
+    # than as missing data. The first solved cell's notes are kept so that
+    # can be said out loud.
+    trial_notes: list[str] = []
     for row in range(rows):
         line: list[float | None] = []
         for column in range(columns):
@@ -215,13 +221,26 @@ def exposure_map(
                 linked_source_ids=list(source_ids),
             )
             try:
-                value = _ratio(evaluate_point(probe_project, poi))
+                solved = evaluate_point(probe_project, poi)
+                value = _ratio(solved)
+                if probe_project.trial_barrier is not None and not trial_notes:
+                    trial_notes = [
+                        note
+                        for contribution in solved.contributions
+                        for note in contribution.notes
+                        if note.startswith("trial ") and "ignored" in note
+                    ]
             except Exception:  # a cell that cannot be solved is a gap, not a zero
                 value = None
             if value is None:
                 unsolved += 1
             line.append(value)
         ratios.append(line)
+
+    for note in trial_notes:
+        warnings.append(
+            f"the assumed barrier does not apply to every source: {note}"
+        )
 
     if unsolved:
         warnings.append(

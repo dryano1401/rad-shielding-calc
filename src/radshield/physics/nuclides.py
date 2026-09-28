@@ -156,17 +156,31 @@ def register_archer(nuclide: str, params: ArcherParams, *, overwrite: bool = Fal
 
 
 def get_archer(nuclide: str, material: str) -> ArcherParams:
-    """Return the transmission fit for a nuclide/material pair."""
+    """Return the transmission fit for a nuclide/material pair.
+
+    The material is matched case- and whitespace-insensitively.  NCRP 147's
+    tables name materials "Lead" and "Concrete" while these are registered
+    lowercase, so an exact-match lookup drops a barrier whose name came from
+    the other methodology's spelling -- and a dropped barrier is silent and
+    unsafe, since it only ever understates the shielding on a path.
+    """
     get_nuclide(nuclide)  # Surface an unknown-nuclide error before an unknown-material one.
     try:
         return _archer[(nuclide, material)]
     except KeyError:
-        known = sorted(m for n, m in _archer if n == nuclide)
-        raise NuclideError(
-            f"no transmission data for {nuclide!r} in {material!r}; "
-            f"registered materials for this nuclide: {known}. "
-            "Use register_archer() to supply alpha/beta/gamma."
-        ) from None
+        pass
+
+    wanted = material.strip().casefold()
+    for (name, registered), params in _archer.items():
+        if name == nuclide and registered.strip().casefold() == wanted:
+            return params
+
+    known = sorted(m for n, m in _archer if n == nuclide)
+    raise NuclideError(
+        f"no transmission data for {nuclide!r} in {material!r}; "
+        f"registered materials for this nuclide: {known}. "
+        "Use register_archer() to supply alpha/beta/gamma."
+    ) from None
 
 
 def available_materials(nuclide: str) -> list[str]:
