@@ -23,6 +23,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import materials
 from .archer import ArcherError, ArcherParams
 from .data_loader import load_table
 
@@ -156,17 +157,32 @@ def register_archer(nuclide: str, params: ArcherParams, *, overwrite: bool = Fal
 
 
 def get_archer(nuclide: str, material: str) -> ArcherParams:
-    """Return the transmission fit for a nuclide/material pair."""
+    """Return the transmission fit for a nuclide/material pair.
+
+    The material is matched through :func:`radshield.physics.materials.normalise`,
+    so NCRP 147's spellings resolve here too -- its tables say "Lead" and
+    "Gypsum Wallboard" where these are registered "lead" and "gypsum".  An
+    exact-match lookup dropped a barrier whose name came from the other
+    methodology's convention, and a dropped barrier is silent and unsafe:
+    it only ever understates the shielding on a path.
+    """
     get_nuclide(nuclide)  # Surface an unknown-nuclide error before an unknown-material one.
     try:
         return _archer[(nuclide, material)]
     except KeyError:
-        known = sorted(m for n, m in _archer if n == nuclide)
-        raise NuclideError(
-            f"no transmission data for {nuclide!r} in {material!r}; "
-            f"registered materials for this nuclide: {known}. "
-            "Use register_archer() to supply alpha/beta/gamma."
-        ) from None
+        pass
+
+    wanted = materials.normalise(material)
+    for (name, registered), params in _archer.items():
+        if name == nuclide and materials.normalise(registered) == wanted:
+            return params
+
+    known = sorted(m for n, m in _archer if n == nuclide)
+    raise NuclideError(
+        f"no transmission data for {nuclide!r} in {material!r}; "
+        f"registered materials for this nuclide: {known}. "
+        "Use register_archer() to supply alpha/beta/gamma."
+    ) from None
 
 
 def available_materials(nuclide: str) -> list[str]:

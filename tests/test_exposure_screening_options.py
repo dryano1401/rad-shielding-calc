@@ -164,3 +164,54 @@ def test_a_shielded_path_needs_nothing_added_and_an_unshielded_one_does():
     governing = lined.methods[-1]
     assert governing.required_transmission > 1.0
     assert not governing.unavailable
+
+
+# --- the trial barrier has to reach every methodology -------------------
+
+
+def tg108_project():
+    from .test_geometry_and_engine import uptake_source
+
+    p = build_project()
+    p.materials = ["lead"]
+    p.sources.append(uptake_source())
+    return p
+
+
+@pytest.mark.parametrize("name", ["Lead", "lead", "LEAD", " Lead "])
+def test_a_trial_barrier_reaches_a_tg108_source_however_its_material_is_spelled(name):
+    """NCRP 147's tables name materials "Lead" while TG-108's fits are
+    registered lowercase. An exact-match lookup dropped the barrier, so the
+    map did not move when the trial barrier changed -- silently, and in the
+    unsafe direction, since a dropped barrier only understates shielding."""
+    project = tg108_project()
+    bare = peak(project)
+    shielded = peak(project, trial_material=name, trial_thickness_mm=3.17)
+    assert shielded < bare
+
+
+def test_the_same_spellings_agree_with_each_other():
+    project = tg108_project()
+    peaks = {
+        peak(project, trial_material=n, trial_thickness_mm=3.17)
+        for n in ("Lead", "lead", "LEAD")
+    }
+    assert len(peaks) == 1
+
+
+def test_a_material_the_methodology_has_no_data_for_is_reported_not_ignored():
+    """TG-108 has no 511 keV fit for gypsum, so the barrier genuinely cannot
+    be applied. Dropping it is conservative; dropping it silently is not
+    acceptable, because it looks identical to a control that does nothing."""
+    project = tg108_project()
+    grid = exposure_map(project, "fl1", columns=12,
+                        trial_material="Gypsum Wallboard", trial_thickness_mm=3.17)
+    assert grid.warnings, "a barrier that could not be applied was dropped silently"
+    assert any("does not apply to every source" in w for w in grid.warnings)
+
+
+def test_an_applicable_barrier_raises_no_such_warning():
+    project = tg108_project()
+    grid = exposure_map(project, "fl1", columns=12,
+                        trial_material="Lead", trial_thickness_mm=3.17)
+    assert not [w for w in grid.warnings if "does not apply" in w]

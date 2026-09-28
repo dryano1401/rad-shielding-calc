@@ -2297,11 +2297,15 @@ async function refreshExposure() {
       ? ` assuming ${state.exposure.trial_material} `
         + `${state.exposure.trial_thickness_mm} mm on every path,`
       : '';
+    // A warning here usually means the assumed barrier was dropped for some
+    // source, which leaves the map looking unchanged; saying so beats letting
+    // it read as a control that does nothing.
+    const warning = state.exposure.warnings[0];
     setStatus(solved
       ? `Worst case${trial} ${state.exposure.area_class} goal: ${over} of ${solved} cells `
         + `over goal, peak ${worst.toPrecision(3)}× — everything green cannot exceed `
-        + `the goal at full occupancy.`
-      : (state.exposure.warnings[0] || 'Nothing to map on this floor.'));
+        + `the goal at full occupancy.` + (warning ? ` ⚠ ${warning}` : '')
+      : (warning || 'Nothing to map on this floor.'));
   } catch (error) {
     if (ticket !== exposureRequest) return;
     state.exposure = null;

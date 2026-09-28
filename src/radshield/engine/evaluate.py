@@ -39,9 +39,15 @@ from ..physics.ncrp147 import carm as ncrp_carm
 from ..physics.ncrp147 import ct as ncrp_ct
 from ..physics.ncrp147 import tables as ncrp_tables
 
-# Materials each methodology can currently attenuate, by tabulated data.
-TG108_MATERIALS = {"lead", "concrete", "iron"}
+# Materials NCRP 147 can attenuate, fixed by the report's own tables.
 NCRP147_MATERIALS = {"lead", "concrete", "gypsum", "steel", "glass", "wood"}
+
+# There is deliberately no equivalent constant for TG-108.  Which materials it
+# can attenuate depends on the nuclide: the shipped 511 keV set is lead,
+# concrete and iron, but an isotope registered through the isotope editor
+# carries whatever fits were entered for it, and a published gypsum fit for a
+# custom nuclide has to be honoured rather than refused by a hardcoded list.
+# :func:`_tg108_archer` asks what is actually registered instead.
 
 _MM_PER_UNIT = {"mm": 1.0, "cm": 10.0}
 
@@ -107,6 +113,19 @@ class PointResult:
     def shielding_required(self) -> bool:
         """True when any methodology demands a non-zero barrier."""
         return any(v > 0 for v in self.governing_thickness_mm.values())
+
+
+def _tg108_archer(nuclide: str, material: str) -> tuple[Any | None, str]:
+    """The registered 511 keV-style fit for a nuclide/material, if there is one.
+
+    Returns ``(params, reason)``; ``params`` is None when nothing is
+    registered, and ``reason`` then explains it in terms of what *is*
+    available for this nuclide rather than asserting a fixed material list.
+    """
+    try:
+        return nuclides.get_archer(nuclide, material), ""
+    except Exception as exc:
+        return None, str(exc)
 
 
 def _existing_credit_mm(poi: PointOfInterest, material: str, unit: str) -> float:
@@ -437,11 +456,10 @@ def _solve_tg108(
     attenuation_nuclide = "F-18" if len(nuclide_names) > 1 else next(iter(nuclide_names))
     params_for = lambda material: nuclides.get_archer(attenuation_nuclide, material)
 
-    usable = [m for m in materials if m in TG108_MATERIALS]
+    resolved = {m: _tg108_archer(attenuation_nuclide, m) for m in materials}
+    usable = [m for m, (params, _) in resolved.items() if params is not None]
     unavailable = {
-        m: "no 511 keV transmission data registered for this material"
-        for m in materials
-        if m not in TG108_MATERIALS
+        m: reason for m, (params, reason) in resolved.items() if params is None
     }
 
     contributions: list[SourceContribution] = []
@@ -771,12 +789,7 @@ def _solve_combined(
     thickness_mm: dict[str, float] = {}
     unavailable: dict[str, str] = {}
     for material in materials:
-        tg108_params: Any | None = None
-        if material in TG108_MATERIALS:
-            try:
-                tg108_params = nuclides.get_archer(tg108_nuclide, material)
-            except Exception:
-                tg108_params = None
+        tg108_params, _ = _tg108_archer(tg108_nuclide, material)
 
         gross = _solve_combined_thickness(
             material, combined_goal_uSv, project,
