@@ -22,18 +22,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .. import materials
 from ..archer import ArcherParams
 from ..data_loader import load_table
 
 # Canonical material keys mapped to the spellings used in the source tables.
-_MATERIAL_ALIASES = {
+# How this report spells each shared material key.  The accepted spellings
+# themselves live in radshield.physics.materials, so the two methodologies
+# cannot drift apart on what counts as the same material.
+_TABLE_SPELLING = {
     "lead": "Lead",
     "concrete": "Concrete",
     "gypsum": "Gypsum Wallboard",
-    "gypsum wallboard": "Gypsum Wallboard",
     "steel": "Steel",
     "glass": "Plate Glass",
-    "plate glass": "Plate Glass",
     "wood": "Wood",
 }
 
@@ -57,12 +59,12 @@ class TableLookupError(KeyError):
 
 def canonical_material(name: str) -> str:
     """Map a material name to the spelling used in the source tables."""
-    key = name.strip().lower()
+    key = materials.normalise(name)
     try:
-        return _MATERIAL_ALIASES[key]
+        return _TABLE_SPELLING[key]
     except KeyError:
         raise TableLookupError(
-            f"unknown material {name!r}; known: {sorted(set(_MATERIAL_ALIASES))}"
+            f"unknown material {name!r}; known: {sorted(_TABLE_SPELLING)}"
         ) from None
 
 

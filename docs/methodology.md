@@ -118,6 +118,23 @@ correct for that isotope's actual photon energy. Overwrite it with real data
 and cite the source before relying on the result; the `source` field is
 carried into the record for exactly that audit purpose.
 
+### Which materials a TG-108 source can be solved for
+
+Not a fixed list. The shipped 511 keV fits cover lead, concrete and iron, but
+an isotope registered through the isotope editor carries whatever fits were
+entered for it, so a published gypsum fit for a therapy nuclide is used where
+it exists. The engine asks what is registered for the nuclide in play rather
+than consulting a hardcoded set, and a material with no fit is reported with
+what *is* available for that nuclide.
+
+Material names are normalised through `radshield.physics.materials` so the two
+methodologies' spellings interoperate — NCRP 147's tables say "Gypsum
+Wallboard" and "Plate Glass" where TG-108's fits are registered "gypsum" and
+"glass". This matters because an unresolved name means a barrier dropped from
+a path, which understates shielding silently. Steel and iron are deliberately
+**not** merged: NCRP 147 fits steel, TG-108 fits iron, and they are different
+materials with different data.
+
 ### Discrepancies found in TG-108
 
 Both were found by reproducing the report's own examples and are encoded in the

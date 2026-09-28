@@ -23,6 +23,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import materials
 from .archer import ArcherError, ArcherParams
 from .data_loader import load_table
 
@@ -158,11 +159,12 @@ def register_archer(nuclide: str, params: ArcherParams, *, overwrite: bool = Fal
 def get_archer(nuclide: str, material: str) -> ArcherParams:
     """Return the transmission fit for a nuclide/material pair.
 
-    The material is matched case- and whitespace-insensitively.  NCRP 147's
-    tables name materials "Lead" and "Concrete" while these are registered
-    lowercase, so an exact-match lookup drops a barrier whose name came from
-    the other methodology's spelling -- and a dropped barrier is silent and
-    unsafe, since it only ever understates the shielding on a path.
+    The material is matched through :func:`radshield.physics.materials.normalise`,
+    so NCRP 147's spellings resolve here too -- its tables say "Lead" and
+    "Gypsum Wallboard" where these are registered "lead" and "gypsum".  An
+    exact-match lookup dropped a barrier whose name came from the other
+    methodology's convention, and a dropped barrier is silent and unsafe:
+    it only ever understates the shielding on a path.
     """
     get_nuclide(nuclide)  # Surface an unknown-nuclide error before an unknown-material one.
     try:
@@ -170,9 +172,9 @@ def get_archer(nuclide: str, material: str) -> ArcherParams:
     except KeyError:
         pass
 
-    wanted = material.strip().casefold()
+    wanted = materials.normalise(material)
     for (name, registered), params in _archer.items():
-        if name == nuclide and registered.strip().casefold() == wanted:
+        if name == nuclide and materials.normalise(registered) == wanted:
             return params
 
     known = sorted(m for n, m in _archer if n == nuclide)
